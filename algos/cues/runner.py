@@ -9,10 +9,27 @@
 #   novelty -- pure novelty across the whole track: the eight highest-novelty
 #              phrase boundaries wherever they fall (cues the middle too).
 # Novelty is a windowed MFCC timbre-change curve; sections spike.
+#
+# The curve is computed from DC7F features (the features leg's artifact:
+# 20 Hz pooled MFCCs), the same lookup-and-sort the deadca7 host does from
+# its stored features (apple/Sources/Engine/Analysis/CuePicker.swift), so
+# `--features PATH` (or `-` for stdin) needs no audio. `--audio` is the
+# fallback: it computes the same DC7F MFCCs in memory (the pooling copied
+# from features/runner.py, rounded through float16 as the file would be)
+# and picks from those, so both paths give the same cues.
+#
+# Identity (algos/README.md): algo_version is the algorithm id and the one
+# identity key is "algo".
 import argparse
+import hashlib
 import json
+import math
+import os
+import struct
 import subprocess
 import sys
+import tempfile
+import warnings
 
 import numpy as np
 
@@ -22,6 +39,34 @@ N_CUES = 8
 FRONT = 4
 BACK = 4
 
+# DC7F recipe 1 constants, as features/runner.py has them.
+FRAME_HZ = 20
+HOP = 512
+N_MFCC = 20
+N_BANDS = 3
+DC7F_HEADER = struct.Struct("<4sHHIBBHI32s12x")
+
+
+# --- DC7F in: the file, or the same MFCCs computed in memory ---------------
+
+
+def read_dc7f(data):
+    # The DC7F layout (features/runner.py, Features.swift): a 64-byte header,
+    # then float16 values channel-major (all low-band frames, mid, high, then
+    # MFCC 0's frames, MFCC 1's, ...). Returns (frame_hz, mfcc[n_mfcc, frames]).
+    if len(data) < DC7F_HEADER.size:
+        raise ValueError("features too short for a DC7F header")
+    magic, version, frame_hz, frames, bands, mfccs, _reserved, duration_ms, _digest = DC7F_HEADER.unpack_from(data)
+    if magic != b"DC7F" or version != 1:
+        raise ValueError("not a DC7F version 1 file")
+    if frame_hz != FRAME_HZ or bands != N_BANDS or mfccs != N_MFCC or frames == 0 or duration_ms == 0:
+        raise ValueError("invalid features dimensions")
+    expected = DC7F_HEADER.size + frames * (bands + mfccs) * 2
+    if len(data) != expected:
+        raise ValueError(f"features size {len(data)} != {expected}")
+    values = np.frombuffer(data, dtype="<f2", offset=DC7F_HEADER.size).reshape(bands + mfccs, frames)
+    return int(frame_hz), values[bands:].astype(np.float64)
+
 
 def rekordbox_timeline(path):
     # ffmpeg input flags that decode on rekordbox's timeline, where the grid's
@@ -30,59 +75,126 @@ def rekordbox_timeline(path):
 
 
 def decode(ffmpeg, path):
-    raw = subprocess.run(
-        [ffmpeg, "-v", "error", *rekordbox_timeline(path), "-i", path, "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"],
-        capture_output=True, check=True,
-    ).stdout
-    return np.frombuffer(raw, dtype=np.float32).astype(np.float64)
+    # features/runner.py's decode: a seekable snapshot so decoder delay and
+    # padding are handled as they are there, and trailing metadata is read.
+    with tempfile.TemporaryDirectory(prefix="dc-cues-") as temp:
+        snapshot = os.path.join(temp, "audio" + os.path.splitext(path)[1])
+        with open(path, "rb") as source, open(snapshot, "wb") as target:
+            while block := source.read(1024 * 1024):
+                target.write(block)
+        result = subprocess.run(
+            [ffmpeg, "-nostdin", "-v", "error", *rekordbox_timeline(snapshot), "-i", snapshot, "-ac", "1",
+             "-ar", str(SR), "-f", "f32le", "-"],
+            capture_output=True, check=True,
+        )
+    samples = np.frombuffer(result.stdout, dtype="<f4").astype(np.float64)
+    if not samples.size:
+        raise ValueError("audio decoded no samples")
+    if not np.isfinite(samples).all():
+        raise ValueError("nonfinite decoded audio")
+    return samples
 
 
-def novelty_curve(samples, beats):
+def pooled_mfcc(samples, frames):
+    # features/runner.py's pooled_mfcc, verbatim.
     import librosa
-    hop = 512
-    mfcc = librosa.feature.mfcc(y=samples, sr=SR, n_mfcc=20, hop_length=hop)
-    frames = np.clip(librosa.time_to_frames(beats, sr=SR, hop_length=hop), 0, mfcc.shape[1] - 1)
-    n = len(frames)
+
+    mel = librosa.feature.melspectrogram(
+        y=samples, sr=SR, hop_length=HOP,
+        n_fft=2048, win_length=2048, window="hann", center=True,
+        pad_mode="constant", power=2.0, n_mels=128, fmin=0.0,
+        fmax=SR / 2, htk=False, norm="slaney",
+    )
+    mfcc = librosa.feature.mfcc(
+        S=librosa.power_to_db(mel, ref=1.0, amin=1e-10, top_db=80.0),
+        n_mfcc=N_MFCC, dct_type=2, norm="ortho", lifter=0,
+    )
+    # Assign each centered MFCC frame by its timestamp to a half-open 50ms bin.
+    boundaries = (np.arange(frames + 1, dtype=np.int64) * SR + FRAME_HZ * HOP - 1) // (FRAME_HZ * HOP)
+    pooled = np.empty((N_MFCC, frames), dtype=np.float64)
+    for i in range(frames):
+        a = min(int(boundaries[i]), mfcc.shape[1] - 1)
+        b = min(max(a + 1, int(boundaries[i + 1])), mfcc.shape[1])
+        pooled[:, i] = mfcc[:, a:b].mean(axis=1)
+    return pooled
+
+
+def mfcc_from_audio(ffmpeg, path):
+    # The DC7F MFCC channels for this audio, as the features leg would write
+    # them: the frame count is the band-RMS clock (one frame per 50 ms,
+    # the last partial), and the values go through float16 as the file's do.
+    samples = decode(ffmpeg, path)
+    frames = int(math.ceil(samples.size / (SR // FRAME_HZ)))
+    mfcc = pooled_mfcc(samples, frames).astype("<f2")
+    if not np.isfinite(mfcc).all():
+        raise ValueError("features exceed finite float16 range")
+    return FRAME_HZ, mfcc.astype(np.float64)
+
+
+# --- The picker, as CuePicker.swift computes it from the stored features --
+
+
+def novelty_curve(mfcc, frame_hz, beats_ms):
+    # CuePicker.noveltyCurve: the frames of each beat averaged (a beat's
+    # frame is floor(ms / 1000 * hz), the last beat runs to the end), each
+    # beat scored by the distance between the mean of the four beats before
+    # it and the four after, the biggest 1.
+    frames = mfcc.shape[1]
+    n = len(beats_ms)
+
+    def frame_of(ms):
+        return min(max(int(math.floor(ms / 1000 * frame_hz)), 0), frames - 1)
+
     feats = np.empty((n, mfcc.shape[0]), dtype=np.float64)
     for i in range(n):
-        a = int(frames[i])
-        b = int(frames[i + 1]) if i + 1 < n else mfcc.shape[1]
-        feats[i] = mfcc[:, a:max(a + 1, b)].mean(axis=1)
+        a = frame_of(beats_ms[i])
+        b = frame_of(beats_ms[i + 1]) if i + 1 < n else frames
+        if b < a + 1:
+            b = a + 1
+        feats[i] = mfcc[:, a:b].mean(axis=1)
     win = BAR_BEATS
     nov = np.zeros(n, dtype=np.float64)
     for i in range(win, n - win):
         before = feats[i - win:i].mean(axis=0)
         after = feats[i:i + win].mean(axis=0)
-        nov[i] = np.linalg.norm(after - before)
-    if nov.max() > 0:
-        nov = nov / nov.max()
+        nov[i] = float(np.sqrt(np.sum((after - before) ** 2)))
+    top = float(nov.max()) if n else 0.0
+    if top > 0:
+        nov = nov / top
     return nov
 
 
-def downbeat_indices(downbeats, beats):
-    # Each real downbeat time to its index in the real beats array (nearest
-    # beat), so cues land on actual downbeat times, nothing reconstructed.
-    return [int(np.argmin(np.abs(beats - d))) for d in downbeats]
+def downbeat_indices(downbeats_ms, beats_ms):
+    # Each downbeat as the index of the nearest beat (the first of equals),
+    # so cues land on actual beat times, nothing reconstructed.
+    beats = np.asarray(beats_ms, dtype=np.int64)
+    return [int(np.argmin(np.abs(beats - d))) for d in downbeats_ms]
 
 
 def phrase_positions(db_idx, phrase_bars):
     # Every phrase_bars-th downbeat is a phrase boundary; the very first
     # downbeat (t~0) is skipped.
-    return [(db_idx[i], i) for i in range(phrase_bars, len(db_idx), phrase_bars)]
+    return [db_idx[i] for i in range(phrase_bars, len(db_idx), phrase_bars)]
+
+
+def top_by_novelty(cands, nov, n):
+    # The n most novel; ties keep time order (a stable sort).
+    return sorted(cands, key=lambda c: -nov[c])[:n]
 
 
 def pick_mix(cands, nov):
+    # The mixing layout: the four most novel boundaries of the first third,
+    # the four of the last, in time order.
     if not cands:
         return []
     third = max(1, len(cands) // 3)
-    start, end = cands[:third], cands[-third:]
-    front = sorted(start, key=lambda c: -nov[c[0]])[:FRONT]
-    back = sorted(end, key=lambda c: -nov[c[0]])[:BACK]
-    return sorted(set(front) | set(back), key=lambda c: c[0])
+    picked = top_by_novelty(cands[:third], nov, FRONT) + top_by_novelty(cands[-third:], nov, BACK)
+    return sorted(set(picked))
 
 
 def pick_novelty(cands, nov):
-    return sorted(sorted(cands, key=lambda c: -nov[c[0]])[:N_CUES], key=lambda c: c[0])
+    # The eight most novel boundaries wherever they fall, in time order.
+    return sorted(top_by_novelty(cands, nov, N_CUES))
 
 
 def parse_algo(algo):
@@ -91,37 +203,95 @@ def parse_algo(algo):
     return kind, bars
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--audio", required=True)
-    ap.add_argument("--beats", required=True, help="JSON list of beat times in seconds")
-    ap.add_argument("--downbeats", required=True, help="JSON list of downbeat times in seconds")
-    ap.add_argument("--algo", default="mix16")
-    ap.add_argument("--ffmpeg", default="ffmpeg")
-    args = ap.parse_args()
-
-    beats = np.asarray(json.loads(args.beats), dtype=np.float64)
-    downbeats = np.asarray(json.loads(args.downbeats), dtype=np.float64)
-    if beats.size < BAR_BEATS * 16 or downbeats.size < 2:
-        print(json.dumps({"cues": []}))
-        return
-
-    samples = decode(args.ffmpeg, args.audio)
-    nov = novelty_curve(samples, beats)
-
-    db_idx = downbeat_indices(downbeats, beats)
-    anchor_idx = db_idx[0] if db_idx else 0
-    kind, phrase_bars = parse_algo(args.algo)
+def pick(mfcc, frame_hz, beats_ms, downbeats_ms, algo):
+    if len(beats_ms) < BAR_BEATS * 16 or len(downbeats_ms) < 2:
+        return []
+    nov = novelty_curve(mfcc, frame_hz, beats_ms)
+    db_idx = downbeat_indices(downbeats_ms, beats_ms)
+    anchor_idx = db_idx[0]
+    kind, phrase_bars = parse_algo(algo)
     cands = phrase_positions(db_idx, phrase_bars)
     chosen = pick_novelty(cands, nov) if kind == "novelty" else pick_mix(cands, nov)
+    # The bar number comes from the chosen beat's index relative to the
+    # first downbeat, so the label can never drift from the position.
+    return [{"comment": "bar %d" % ((bi - anchor_idx) // BAR_BEATS), "hot_cue": slot + 1, "time_ms": int(beats_ms[bi])}
+            for slot, bi in enumerate(chosen)]
 
-    cues = []
-    for slot, (bi, _bar) in enumerate(chosen):
-        # The bar number comes from the chosen beat's index relative to the
-        # first downbeat, so the label can never drift from the position.
-        bar_num = (bi - anchor_idx) // BAR_BEATS
-        cues.append({"comment": "bar %d" % bar_num, "hot_cue": slot + 1, "time_ms": int(round(float(beats[bi]) * 1000))})
-    print(json.dumps({"algo": args.algo, "cues": cues}))
+
+# --- Identity and the command line -----------------------------------------
+
+
+def canonical_hash(cfg):
+    # sha256 of the canonical JSON (sorted keys, no whitespace) of the
+    # identity keys of algos/cues/algo.json: {"algo": "mix16"}.
+    return hashlib.sha256(json.dumps(cfg, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def to_ms(seconds):
+    # The host passes the grid in ms; the leg takes seconds and rounds back
+    # to the same integers.
+    return [int(round(float(t) * 1000)) for t in seconds]
+
+
+ALGOS = ["mix8", "mix16", "novelty8", "novelty16"]
+
+
+def run_one(ffmpeg, algo, beats, downbeats, features="", audio=""):
+    if algo not in ALGOS:
+        raise ValueError(f'unknown cue algorithm "{algo}"')
+    beats_ms = to_ms(beats)
+    downbeats_ms = to_ms(downbeats)
+    out = {"algo": algo, "algo_version": algo, "cfg_hash": canonical_hash({"algo": algo})}
+    if len(beats_ms) < BAR_BEATS * 16 or len(downbeats_ms) < 2:
+        out["cues"] = []
+        return out
+    if features:
+        data = sys.stdin.buffer.read() if features == "-" else open(features, "rb").read()
+        frame_hz, mfcc = read_dc7f(data)
+        out["features"] = "dc7f"
+    elif audio:
+        frame_hz, mfcc = mfcc_from_audio(ffmpeg, audio)
+        out["features"] = "audio"
+    else:
+        raise ValueError("features or audio is required")
+    out["cues"] = pick(mfcc, frame_hz, beats_ms, downbeats_ms, algo)
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--audio", help="the track; read only when --features is not given")
+    ap.add_argument("--features", default="", help="a DC7F file from the features leg, or - for stdin; with it no audio is read")
+    ap.add_argument("--beats", help="JSON list of beat times in seconds")
+    ap.add_argument("--downbeats", help="JSON list of downbeat times in seconds")
+    ap.add_argument("--algo", default="mix16", choices=ALGOS)
+    # JSON [{"id": ..., "features": PATH or "audio": PATH, "beats": [...],
+    # "downbeats": [...], "algo": ...}, ...]: one JSON line per item; a
+    # failed item reports its error and the batch goes on.
+    ap.add_argument("--items")
+    ap.add_argument("--ffmpeg", default="ffmpeg")
+    args = ap.parse_args()
+    warnings.filterwarnings("ignore")
+
+    if args.items:
+        for item in json.loads(args.items):
+            try:
+                out = run_one(args.ffmpeg, item.get("algo", args.algo), item["beats"], item["downbeats"],
+                              features=item.get("features", ""), audio=item.get("audio", ""))
+            except Exception as e:  # one bad item must not sink the batch
+                out = {"error": str(e)}
+            out["id"] = item["id"]
+            json.dump(out, sys.stdout, separators=(",", ":"))
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        return
+    if not args.features and not args.audio:
+        ap.error("--features or --audio is required")
+    if args.beats is None or args.downbeats is None:
+        ap.error("--beats and --downbeats are required")
+    out = run_one(args.ffmpeg, args.algo, json.loads(args.beats), json.loads(args.downbeats),
+                  features=args.features, audio=args.audio or "")
+    print(json.dumps(out, separators=(",", ":")))
 
 
 if __name__ == "__main__":

@@ -6,9 +6,12 @@
 # integer BPM snap within tolerance, the lattice extended back to ~0 with the
 # opening beat as bar 1, and the audio-anchored origin refiner. The raw model
 # downbeats also vote on bar phase (bt_phase_vote, agreement 0..1): reported
-# for arbitration, never applied here.
+# for arbitration, never applied here. v2 is the same algorithm with the
+# engine's identity contract (algos/README.md).
 import argparse
+import hashlib
 import json
+import os
 import subprocess
 import sys
 
@@ -17,7 +20,7 @@ import soundfile as sf
 
 SR = 44100
 
-ALGO_VERSION = "beat-this-v1"
+ALGO_VERSION = "beat-this-v2"
 BPM_SNAP_TOLERANCE = 0.15
 DYNAMIC_RESID_S = 0.05
 DYNAMIC_FRACTION = 0.10
@@ -139,7 +142,52 @@ def refit_origin(beats, period, origin):
     return origin + float(np.mean(resid))
 
 
+def model_name(model):
+    # The identity names the checkpoint, never its path: a bundled
+    # beatthis/final0.ckpt and the library's own "final0" are one model.
+    base = os.path.basename(model)
+    return base[:-5] if base.endswith(".ckpt") else base
+
+
+def identity_cfg(args):
+    # The identity keys of algos/beat_this/algo.json, and nothing else:
+    # device is provenance, not identity, and paths never enter.
+    return {
+        "beats_per_bar": int(args.beats_per_bar),
+        "model": model_name(args.model),
+        "origin_frame_snap": float(args.origin_frame_snap),
+        "origin_refine": not args.no_refine,
+    }
+
+
+def canonical_json(cfg):
+    # The canonical form every implementation of this leg must reproduce
+    # byte for byte (docs/engine-protocol.md, Identity rules): keys sorted,
+    # no whitespace, ints as ints (4), floats as their shortest round-trip
+    # repr (0.0), bools as true/false, strings JSON-escaped. Python's json
+    # gives exactly this; a native port must match these bytes.
+    return json.dumps(cfg, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+
+
+def canonical_hash(cfg):
+    return hashlib.sha256(canonical_json(cfg).encode("utf-8")).hexdigest()
+
+
+def resolve_device(device):
+    # "auto" is the Apple GPU when torch has it, else the CPU; the grid is
+    # the same either way and the choice is reported, not hashed.
+    if device != "auto":
+        return device
+    try:
+        import torch
+        return "mps" if torch.backends.mps.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
 def analyze(f2b, args):
+    cfg = identity_cfg(args)
+    cfg_hash = canonical_hash(cfg)
     beats, downbeats = f2b(args.audio)
     beats = np.asarray(beats, dtype=np.float64)
     downbeats = np.asarray(downbeats, dtype=np.float64)
@@ -183,13 +231,9 @@ def analyze(f2b, args):
         "provider": "beat_this",
         "audio_path": args.audio,
         "algo_version": ALGO_VERSION,
-        "config": {
-            "beats_per_bar": bar,
-            "device": args.device,
-            "model": args.model,
-            "origin_frame_snap": args.origin_frame_snap,
-            "origin_refine": not args.no_refine,
-        },
+        "cfg_hash": cfg_hash,
+        "identity": {"algo_version": ALGO_VERSION, "cfg_hash": cfg_hash, "cfg": cfg},
+        "config": dict(cfg, device=args.device, model_path=args.model),
         "grid": {
             "bpm": round(bpm, 3),
             "first_beat_ms": ms(lattice[0]) if len(lattice) else None,
@@ -220,12 +264,13 @@ def main():
     # batch goes on.
     ap.add_argument("--items")
     ap.add_argument("--model", default="final0")
-    ap.add_argument("--device", default="cpu")
+    ap.add_argument("--device", default="cpu", help="cpu, mps, cuda:N, or auto (mps when available, else cpu)")
     ap.add_argument("--beats-per-bar", type=int, default=4)
     ap.add_argument("--no-refine", action="store_true")
     ap.add_argument("--origin-frame-snap", type=float, default=0)
     ap.add_argument("--ffmpeg", default="ffmpeg")
     args = ap.parse_args()
+    args.device = resolve_device(args.device)
 
     from beat_this.inference import File2Beats
 

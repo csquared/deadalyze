@@ -6,20 +6,24 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-// pinned are the runners the hosts embed. deadcatalog's go:embed copies and
-// DEADCA7's Swift literals hash to the same values (RunnerScriptTests pins
-// them there); a change here is a change to every host.
+// pinned are the runners the engine runs, under the leg contract in
+// README.md. Until the hosts cut over to the engine (docs/porting.md) they
+// carry the previous runners (go:embed in deadcatalog, Swift literals in
+// DEADCA7), so the sibling tests below only report a mismatch; after the
+// cutover the pin test becomes a protocol check again, with the siblings
+// required to match these bytes.
 var pinned = map[string]string{
-	"beatnet":   "c3e09d9cbef26d4f8ecd0badcaa7e1f98854a87054e06d341078e04245f8e349",
-	"beat_this": "da59474cb7508adb09508e41372d13c1ad04d9dc0c6cc11344223fd3e0a0da8d",
-	"key":       "7365846033a816b79a8f700eb2cc686c02f4efa23bb132be554f67e8dbd12662",
-	"features":  "b0927c76071b040b6c286c98a4b5a46711ad1463922903b1485e7fda10a166cb",
-	"cues":      "d5e38a0a1496775fe059cc11be1c34f0636eb62501574f73c56ddfe625069ce1",
+	"beatnet":   "45e8ef43c89d6687c277d7b5a8000528c5e78269e5b57902d8bedf1c7e3ef29f",
+	"beat_this": "da24e3fd146f26e61b1ccffb7f64080dd3918f20d93cdef19b03834179cfe226",
+	"key":       "4f5e4ff2a7fa4858b4758d5c764610fb0dbf68f6160c9c94e289bdc197143c9e",
+	"features":  "0cc9370bf6b2e07ba3369d48ce005f275224545178673b28ba375619237eda96",
+	"cues":      "ff743d62c231d51637681c64a26516b6e72a11f0ef4391b94ad0a57534ca096d",
 }
 
 // siblings are where the hosts keep their copies, relative to this repo.
@@ -81,7 +85,10 @@ func TestSiblingsAgree(t *testing.T) {
 			if _, err := os.Stat(p); err != nil {
 				t.Skipf("sibling %s not checked out", p)
 			}
-			require.Equal(t, pinned[name], sum(t, p), "%s drifted from algos/%s/runner.py", p, name)
+			if got := sum(t, p); got != pinned[name] {
+				t.Logf("%s (%s) differs from algos/%s/runner.py (%s)", p, got, name, pinned[name])
+				t.Skip("hosts carry the previous runners until they cut over to the engine")
+			}
 		}
 	}
 }
@@ -95,6 +102,9 @@ func TestSwiftLiteralsAgree(t *testing.T) {
 		t.Skip("deadca7 not checked out beside this repo")
 	}
 	for name, want := range pinned {
-		require.Contains(t, string(b), `"`+want+`"`, "DEADCA7 pins a different %s runner", name)
+		if !strings.Contains(string(b), `"`+want+`"`) {
+			t.Logf("DEADCA7 pins a different %s runner than %s", name, want)
+			t.Skip("hosts carry the previous runners until they cut over to the engine")
+		}
 	}
 }

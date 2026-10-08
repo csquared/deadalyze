@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-"""DC7F recipe 1: fixed-clock band RMS and pooled MFCCs, independent of beats."""
+"""DC7F recipe 1: fixed-clock band RMS and pooled MFCCs, independent of beats.
+
+One track (--audio) writes the raw DC7F bytes to stdout. A batch (--items)
+writes one JSON line per item with the bytes base64 in data.b64, under the
+leg identity (algos/README.md): algo_version dc7f-1, no identity keys, so
+cfg_hash is the sha256 of "{}".
+"""
 import argparse
+import base64
 import hashlib
+import json
 import math
 import os
 import struct
@@ -17,6 +25,9 @@ FRAME_HZ = 20
 HOP = 512
 N_MFCC = 20
 DB_FLOOR = -120.0
+ALGO_VERSION = "dc7f-1"
+# sha256 of the canonical JSON of no identity keys: "{}".
+CFG_HASH = hashlib.sha256(b"{}").hexdigest()
 
 
 def rekordbox_timeline(path):
@@ -122,10 +133,33 @@ def extract(samples, digest):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--audio", required=True)
+    ap.add_argument("--audio")
+    # JSON [{"id": ..., "audio": PATH}, ...]: one JSON line per item, the
+    # DC7F bytes base64 under data.b64; a failed track reports its error
+    # and the batch goes on.
+    ap.add_argument("--items")
     ap.add_argument("--ffmpeg", default="ffmpeg")
     args = ap.parse_args()
     warnings.filterwarnings("ignore")
+    if args.items:
+        for item in json.loads(args.items):
+            try:
+                samples, digest = decode(args.ffmpeg, item["audio"])
+                out = {
+                    "format": "dc7f",
+                    "algo_version": ALGO_VERSION,
+                    "cfg_hash": CFG_HASH,
+                    "data": {"b64": base64.b64encode(extract(samples, digest)).decode("ascii")},
+                }
+            except Exception as e:  # one bad track must not sink the batch
+                out = {"error": str(e)}
+            out["id"] = item["id"]
+            json.dump(out, sys.stdout, separators=(",", ":"))
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        return
+    if not args.audio:
+        ap.error("--audio or --items is required")
     samples, digest = decode(args.ffmpeg, args.audio)
     sys.stdout.buffer.write(extract(samples, digest))
 

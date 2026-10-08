@@ -1,0 +1,10 @@
+[package]
+name = "protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The deadca7 engine protocol: the request a host writes and the events an engine answers, as serde types."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

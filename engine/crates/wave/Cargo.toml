@@ -1,0 +1,12 @@
+[package]
+name = "wave"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "deadca7's waveform renderer: band-filtered PCM to rekordbox's mono, colour and three-band waves"
+
+[dependencies]
+anyhow.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

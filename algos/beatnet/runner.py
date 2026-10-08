@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # BeatNet (CRNN + madmom DBN) fitted to a constant-tempo lattice: the primary
 # leg of the deadca7 engine, ported from DEADCA7's analysis pipeline
-# (beatnet-dbn-v14). Raw beats are never the grid. The cleanest 64-beat
+# (beatnet-dbn-v14; v15 is the same algorithm with the engine's identity
+# contract, algos/README.md). Raw beats are never the grid. The cleanest 64-beat
 # window (scored by span over p95 error) anchors the tempo; the strongest
 # downbeat candidate's local fit gives the BPM, snapped to an integer within
 # tolerance; a constant lattice is laid from BeatNet's first beat back to the
@@ -18,7 +19,7 @@ import types
 import numpy as np
 
 SR = 44100
-ALGO_VERSION = "beatnet-dbn-v14"
+ALGO_VERSION = "beatnet-dbn-v15"
 
 ANCHOR_WINDOW_BEATS = 64
 ANCHOR_STEP_BEATS = 8
@@ -381,24 +382,56 @@ def refine_origin(samples, beats, downbeats, duration):
     return refined, refined_down, shift * 1000
 
 
-def analyze(args, estimator=None):
-    cfg = {
-        "anchor_max_bpm": args.max_bpm,
-        "anchor_min_bpm": args.min_bpm,
-        "anchor_step_beats": ANCHOR_STEP_BEATS,
-        "anchor_window_beats": ANCHOR_WINDOW_BEATS,
-        "beats_per_bar": args.beats_per_bar,
-        "bpm_drift_tolerance": BPM_DRIFT_TOLERANCE,
-        "device": args.device,
+def identity_cfg(args):
+    # The identity keys of algos/beatnet/algo.json, and nothing else: device
+    # is provenance, not identity (the same cfg on cpu and mps is the same
+    # grid), and paths never enter.
+    return {
+        "anchor_max_bpm": float(args.max_bpm),
+        "anchor_min_bpm": float(args.min_bpm),
+        "anchor_step_beats": int(ANCHOR_STEP_BEATS),
+        "anchor_window_beats": int(ANCHOR_WINDOW_BEATS),
+        "beats_per_bar": int(args.beats_per_bar),
+        "bpm_drift_tolerance": float(BPM_DRIFT_TOLERANCE),
         "inference_model": "DBN",
         "mode": "offline",
-        "model": args.model,
-        "origin_frame_snap": args.origin_frame_snap,
+        "model": int(args.model),
+        "origin_frame_snap": float(args.origin_frame_snap),
         "origin_refine": not args.no_refine,
-        "post_candidates": POST_CANDIDATES,
+        "post_candidates": int(POST_CANDIDATES),
         "strategy": "strong_downbeat_candidate_local_bpm",
     }
-    cfg_hash = hashlib.sha256(json.dumps(cfg, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def canonical_json(cfg):
+    # The canonical form every implementation of this leg must reproduce
+    # byte for byte (docs/engine-protocol.md, Identity rules): keys sorted,
+    # no whitespace, ints as ints (1), floats as their shortest round-trip
+    # repr (0.0, 70.0, 0.005), bools as true/false, strings JSON-escaped.
+    # Python's json gives exactly this; a native port must match these
+    # bytes, not re-derive them.
+    return json.dumps(cfg, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+
+
+def canonical_hash(cfg):
+    return hashlib.sha256(canonical_json(cfg).encode("utf-8")).hexdigest()
+
+
+def resolve_device(device):
+    # "auto" is the Apple GPU when torch has it, else the CPU; the grid is
+    # the same either way and the choice is reported, not hashed.
+    if device != "auto":
+        return device
+    try:
+        import torch
+        return "mps" if torch.backends.mps.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+def analyze(args, estimator=None):
+    cfg = identity_cfg(args)
+    cfg_hash = canonical_hash(cfg)
 
     if estimator is None:
         estimator = load_beatnet(args.model, args.device, args.beats_per_bar)
@@ -447,7 +480,8 @@ def analyze(args, estimator=None):
         "audio_path": args.audio,
         "algo_version": ALGO_VERSION,
         "cfg_hash": cfg_hash,
-        "config": cfg,
+        "identity": {"algo_version": ALGO_VERSION, "cfg_hash": cfg_hash, "cfg": cfg},
+        "config": dict(cfg, device=args.device),
         "grid": {
             "bpm": round(float(bpm), 3),
             "first_beat_ms": ms(beats[0]),
@@ -485,11 +519,12 @@ def main():
     ap.add_argument("--max-bpm", type=float, default=150.0)
     ap.add_argument("--beats-per-bar", type=int, default=4)
     ap.add_argument("--model", type=int, default=1)
-    ap.add_argument("--device", default="cpu")
+    ap.add_argument("--device", default="cpu", help="cpu, mps, cuda:N, or auto (mps when available, else cpu)")
     ap.add_argument("--no-refine", action="store_true")
     ap.add_argument("--origin-frame-snap", type=float, default=0)
     ap.add_argument("--ffmpeg", default="ffmpeg")
     args = ap.parse_args()
+    args.device = resolve_device(args.device)
     if args.items:
         estimator = load_beatnet(args.model, args.device, args.beats_per_bar)
         for item in json.loads(args.items):
