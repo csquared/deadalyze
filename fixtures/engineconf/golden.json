@@ -1,0 +1,63 @@
+{
+  "12.mp3": {
+    "bpm": 117.02,
+    "first_beat_ms": 117,
+    "first_downbeat_ms": 117,
+    "beats": 830,
+    "identity_hash": "e58432ed5afb8eba8317cf81d77ff3a98d3604b52fe1e29a4c0dd252f4e3f6b0",
+    "waveforms": {
+      "color_detail": "d91417271e9d433d0dd8f62694f17c4e460e43626af885cac91f78508ef62fec",
+      "color_preview": "394c10e54f7d5cfa5879acd9ee887535f5e8b27f37fb97dcdcb477c9cdfb5d54",
+      "mono_detail": "97535a2bda6c0340961a9702c778bdd4b87b5b096f77bbb11e204385187b7fd6",
+      "mono_preview": "2f6353025b2488995a04c7d12a1884c8eeff0921f286a66977c0f9336e7f2a85",
+      "three_band_detail": "a130e50a375c4b1f0168368f2b5ca4a77b89fa730897052c46a6606379eff914",
+      "three_band_preview": "b096e52761efbbd9abdc8fef48a17e632cc1c44a6f4f13c6ac89c71abaa5cb6c",
+      "three_band_scales": "81a46d99ab711b225a88c81808bb22f2acca7cddd8e04bab27eb01fee3afdb4e"
+    },
+    "features": "af882cc78e65112abc28de150a04f3e53708c2cf959caf0a3fa829d71c8b1f07",
+    "features_bytes": 391524,
+    "key": "D minor",
+    "cues": [
+      {
+        "comment": "bar 16",
+        "hot_cue": 1,
+        "time_ms": 32932
+      },
+      {
+        "comment": "bar 32",
+        "hot_cue": 2,
+        "time_ms": 65747
+      },
+      {
+        "comment": "bar 48",
+        "hot_cue": 3,
+        "time_ms": 98562
+      },
+      {
+        "comment": "bar 64",
+        "hot_cue": 4,
+        "time_ms": 131376
+      },
+      {
+        "comment": "bar 144",
+        "hot_cue": 5,
+        "time_ms": 295451
+      },
+      {
+        "comment": "bar 160",
+        "hot_cue": 6,
+        "time_ms": 328266
+      },
+      {
+        "comment": "bar 176",
+        "hot_cue": 7,
+        "time_ms": 361081
+      },
+      {
+        "comment": "bar 192",
+        "hot_cue": 8,
+        "time_ms": 393896
+      }
+    ]
+  }
+}

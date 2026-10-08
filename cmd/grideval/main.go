@@ -10,9 +10,10 @@
 //	go run ./cmd/grideval -corpus-dir ~/grids -provider contributor # another provider's stored grids
 //	go run ./cmd/grideval -corpus-dir ~/grids -json out.json        # keep the per-track scores
 //
-// Fresh, with the runtime (dc runtime install, or DEADCATALOG_RUNTIME at a
-// build stage): every track whose audio is found is analysed again with the
-// current engine, about twenty seconds a file.
+// Fresh, with the bundle's engine (DEADCA7_BUNDLE, or the installed runtime;
+// DEADCA7_ENGINE and DEADCA7_ALGOS point at a built engine and a checkout of
+// the legs while a bundle without them is installed): every track whose
+// audio is found is analysed again, as one batch.
 //
 //	go run ./cmd/grideval -corpus-dir ~/grids -fresh -audio ~/Music     # audio found by file name under -audio
 //	go run ./cmd/grideval -corpus-dir ~/grids -fresh                    # audio at the paths the catalogs keep (-keep-paths)
@@ -38,11 +39,20 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"github.com/csquared/deadalyze/client"
 	"github.com/csquared/deadalyze/corpus"
-	"github.com/csquared/deadcatalog/analysis"
-	"github.com/csquared/deadcatalog/analysis/engine"
-	"github.com/csquared/deadcatalog/catalog"
 )
+
+// options are what a fresh run tells the engine.
+type options struct {
+	// NoArbitrate flags the cross-checker's disagreements but never applies
+	// its fixes (the settings' `arbitrate: false`).
+	NoArbitrate bool
+}
+
+func (o options) settings() map[string]any {
+	return map[string]any{"name": "dance4x4", "arbitrate": !o.NoArbitrate}
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -65,7 +75,7 @@ func run() error {
 		limit     = flag.Int("n", 0, "score only the first n tracks (0: all)")
 		source    = flag.String("source", "", "corpus: score only the tracks from this source (an index entry's source, by prefix)")
 		only      = flag.String("only", "", "corpus: score only the tracks whose file names are listed in this file (one a line; a grideval JSON works too)")
-		noArb     = flag.Bool("no-arbitrate", false, "corpus -fresh: flag the cross-checker's disagreements but never apply its fixes (the engine's NoArbitrate)")
+		noArb     = flag.Bool("no-arbitrate", false, "corpus -fresh: flag the cross-checker's disagreements but never apply its fixes (settings arbitrate: false)")
 	)
 	flag.Parse()
 	ctx := context.Background()
@@ -77,7 +87,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		scores, err = scoreCorpus(ctx, *corpusDir, *truth, *provider, *fresh, *audioDir, *source, names, engine.Options{NoKey: true, NoArbitrate: *noArb}, *limit)
+		scores, err = scoreCorpus(ctx, *corpusDir, *truth, *provider, *fresh, *audioDir, *source, names, options{NoArbitrate: *noArb}, *limit)
 	case *audio != "" || *refsPath != "":
 		return folderMode(ctx, *audio, *refsPath, *update, *jsonOut)
 	default:
@@ -91,7 +101,7 @@ func run() error {
 }
 
 // scoreCorpus scores one provider's grids against another's, track by track.
-func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, audioDir, source string, only map[string]bool, opts engine.Options, limit int) ([]Score, error) {
+func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, audioDir, source string, only map[string]bool, opts options, limit int) ([]Score, error) {
 	idx, err := corpus.Load(dir)
 	if err != nil {
 		return nil, err
@@ -169,30 +179,53 @@ func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, a
 	return scores, nil
 }
 
-// scoreFresh analyses the paths as one batch and scores each as it
-// completes. The key detector is off (opts says so): scoring reads the grid
-// only. A track the engine fails is a scored error, never the end of the
-// run.
-func scoreFresh(ctx context.Context, paths []string, refs map[string]Reference, opts engine.Options) []Score {
+// scoreFresh analyses the paths as one batch through the engine and scores
+// each grid as it lands. Only the grid task is asked for: scoring reads
+// nothing else. A track the engine fails is a scored error, never the end
+// of the run.
+func scoreFresh(ctx context.Context, paths []string, refs map[string]Reference, opts options) []Score {
 	var scores []Score
 	started := time.Now()
 	last := started
-	engine.AnalyzeBatch(ctx, paths, opts, func(done, total int, path string, result *analysis.Result, err error) {
-		now := time.Now()
-		ref := refs[path]
-		var s Score
-		if err != nil {
-			s = Score{Path: ref.Path, BPMRef: ref.BPM, Error: err.Error()}
-		} else {
-			s = score(ref, result)
+	eng, err := client.Resolve()
+	if err != nil {
+		for _, p := range paths {
+			scores = append(scores, Score{Path: refs[p].Path, BPMRef: refs[p].BPM, Error: err.Error()})
 		}
+		return scores
+	}
+	items := make([]client.Item, 0, len(paths))
+	for _, p := range paths {
+		items = append(items, client.Item{ID: p, Audio: p, Tasks: []string{client.TaskGrid}})
+	}
+	done := 0
+	add := func(path string, s Score) {
+		now := time.Now()
 		// The batch overlaps tracks, so the per-track figure is the time
 		// since the previous result: the batch's throughput, not a latency.
 		s.Duration = now.Sub(last).Seconds()
 		last = now
+		done++
 		scores = append(scores, s)
-		fmt.Printf("[%d/%d] %s\n", done, total, s.line())
+		fmt.Printf("[%d/%d] %s\n", done, len(paths), s.line())
+	}
+	seen := map[string]bool{}
+	err = eng.Analyze(ctx, client.Request{Settings: opts.settings(), Items: items}, func(ev client.Event) {
+		ref := refs[ev.ID]
+		switch ev.Event {
+		case client.GridEvent:
+			seen[ev.ID] = true
+			add(ev.ID, score(ref, fromGrid(ev)))
+		case client.ItemError:
+			if ev.Task == client.TaskGrid && !seen[ev.ID] {
+				seen[ev.ID] = true
+				add(ev.ID, Score{Path: ref.Path, BPMRef: ref.BPM, Error: ev.Code + ": " + ev.Message})
+			}
+		}
 	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "grideval:", err)
+	}
 	if n := len(scores); n > 0 {
 		fmt.Printf("grideval: %d track(s) in %.0fs, %.1fs a track\n", n, time.Since(started).Seconds(), time.Since(started).Seconds()/float64(n))
 	}
@@ -226,26 +259,6 @@ func audioPath(ctx context.Context, db *sql.DB, e corpus.Entry, byName map[strin
 		}
 	}
 	return ""
-}
-
-func resultFromBeats(tuples []catalog.BeatTuple, g corpus.Grid) *analysis.Result {
-	r := &analysis.Result{Provider: g.Provider, Version: g.Version, BPM: g.BPM}
-	r.Grid = analysis.Grid{BPM: g.BPM, BeatsPerBar: g.BeatsPerBar}
-	for i, t := range tuples {
-		r.Beats = append(r.Beats, analysis.Beat{Index: i, TimeMs: int(t[2]), BeatNumber: int(t[0])})
-		if t[0] == 1 {
-			r.Downbeats = append(r.Downbeats, analysis.Downbeat{Index: i, TimeMs: int(t[2]), BeatNumber: 1})
-		}
-	}
-	if len(r.Beats) > 0 {
-		first := r.Beats[0].TimeMs
-		r.Grid.FirstBeatMs = &first
-	}
-	if len(r.Downbeats) > 0 {
-		first := r.Downbeats[0].TimeMs
-		r.Grid.FirstDownbeatMs = &first
-	}
-	return r
 }
 
 // audioByName indexes the audio files under a directory by base name.
@@ -381,22 +394,49 @@ func folderMode(ctx context.Context, dir, refsPath string, update bool, jsonOut 
 	if len(refs) == 0 {
 		return errors.Errorf("no references in %s", refsPath)
 	}
-	var scores []Score
+	eng, err := client.Resolve()
+	if err != nil {
+		return err
+	}
+	items := make([]client.Item, 0, len(refs))
+	index := map[string]int{}
 	for i, ref := range refs {
-		started := time.Now()
-		result, err := engine.Analyze(ctx, filepath.Join(dir, ref.Path))
-		if err != nil {
-			return errors.Errorf("%s: %w", ref.Path, err)
+		items = append(items, client.Item{ID: ref.Path, Audio: filepath.Join(dir, ref.Path), Tasks: []string{client.TaskGrid}})
+		index[ref.Path] = i
+	}
+	var scores []Score
+	started := time.Now()
+	last := started
+	var failed error
+	err = eng.Analyze(ctx, client.Request{Settings: map[string]any{"name": "dance4x4"}, Items: items}, func(ev client.Event) {
+		i, ok := index[ev.ID]
+		if !ok {
+			return
 		}
-		if update {
-			refs[i] = referenceFrom(ref, result)
-			fmt.Printf("ref   %s  bpm %.2f  downbeat %d ms\n", ref.Path, refs[i].BPM, refs[i].FirstDownbeatMs)
-			continue
+		switch ev.Event {
+		case client.GridEvent:
+			result := fromGrid(ev)
+			if update {
+				refs[i] = referenceFrom(refs[i], result)
+				fmt.Printf("ref   %s  bpm %.2f  downbeat %d ms\n", refs[i].Path, refs[i].BPM, refs[i].FirstDownbeatMs)
+				return
+			}
+			s := score(refs[i], result)
+			s.Duration = time.Since(last).Seconds()
+			last = time.Now()
+			scores = append(scores, s)
+			fmt.Println(s.line())
+		case client.ItemError:
+			if ev.Task == client.TaskGrid && failed == nil {
+				failed = errors.Errorf("%s: %s: %s", ev.ID, ev.Code, ev.Message)
+			}
 		}
-		s := score(ref, result)
-		s.Duration = time.Since(started).Seconds()
-		scores = append(scores, s)
-		fmt.Println(s.line())
+	})
+	if err != nil {
+		return err
+	}
+	if failed != nil {
+		return failed
 	}
 	if update {
 		if err := writeRefs(refsPath, refs); err != nil {
@@ -424,12 +464,12 @@ func (s Score) line() string {
 		mark, s.Path, s.BPM, s.BPMRef, s.BPMDelta, s.BeatsPerBar, s.BeatsPerBarRef, s.PhaseBeats, s.Bars, s.FirstDownbeatMs, s.Duration, dispute)
 }
 
-func referenceFrom(ref Reference, r *analysis.Result) Reference {
+func referenceFrom(ref Reference, r *Result) Reference {
 	ref.BPM = r.BPM
 	if first, ok := firstDownbeat(r); ok {
 		ref.FirstDownbeatMs = first
 	}
-	ref.BeatsPerBar = r.Grid.BeatsPerBar
+	ref.BeatsPerBar = r.BeatsPerBar
 	if ref.BeatsPerBar <= 0 {
 		ref.BeatsPerBar = 4
 	}

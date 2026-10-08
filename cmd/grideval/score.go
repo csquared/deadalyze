@@ -4,8 +4,74 @@ import (
 	"math"
 	"sort"
 
-	"github.com/csquared/deadcatalog/analysis"
+	"github.com/csquared/deadalyze/client"
+	"github.com/csquared/deadalyze/corpus"
 )
+
+// Result is a grid as the scorer reads it: the engine's grid event, or a
+// stored grid rebuilt from its beat tuples.
+type Result struct {
+	BPM             float64
+	BeatsPerBar     int
+	FirstDownbeatMs *int
+	Beats           []Beat
+	Dispute         string
+	// The cross-checker's vote and what arbitration did, from a fresh
+	// grid's consensus record; a stored grid has none.
+	PhaseVote      int
+	PhaseAgreement float64
+	RelabelBeats   int
+	ShiftMs        int
+	Consensus      string
+}
+
+type Beat struct {
+	TimeMs     int
+	BeatNumber int
+}
+
+// fromGrid is the engine's grid event as a Result.
+func fromGrid(ev client.Event) *Result {
+	r := &Result{BPM: ev.BPM, BeatsPerBar: ev.BeatsPerBar}
+	for _, b := range ev.Beats {
+		r.Beats = append(r.Beats, Beat{TimeMs: int(b[1]), BeatNumber: int(b[0])})
+	}
+	if ev.FirstDownbeatMs != nil {
+		v := int(*ev.FirstDownbeatMs)
+		r.FirstDownbeatMs = &v
+	}
+	if c := ev.Consensus; c != nil {
+		r.Consensus = c.Verdict
+		r.Dispute = c.Dispute
+		if c.BeatThis != nil {
+			r.PhaseVote = c.BeatThis.PhaseVote
+			r.PhaseAgreement = c.BeatThis.PhaseAgreement
+		}
+		if c.RelabelBeats != nil {
+			r.RelabelBeats = int(*c.RelabelBeats)
+		}
+		if c.ShiftMs != nil {
+			r.ShiftMs = int(*c.ShiftMs)
+		}
+	}
+	return r
+}
+
+// resultFromBeats is a stored grid as a Result.
+func resultFromBeats(tuples []corpus.BeatTuple, g corpus.Grid) *Result {
+	r := &Result{BPM: g.BPM, BeatsPerBar: g.BeatsPerBar}
+	for _, t := range tuples {
+		r.Beats = append(r.Beats, Beat{TimeMs: int(t[2]), BeatNumber: int(t[0])})
+	}
+	for _, b := range r.Beats {
+		if b.BeatNumber == 1 {
+			first := b.TimeMs
+			r.FirstDownbeatMs = &first
+			break
+		}
+	}
+	return r
+}
 
 // Thresholds: a grid passes when its tempo, its bar phase and its bar
 // count all land on the reference. Phase is the signal that matters on
@@ -55,7 +121,7 @@ type Score struct {
 }
 
 // score compares a fresh result with its reference.
-func score(ref Reference, r *analysis.Result) Score {
+func score(ref Reference, r *Result) Score {
 	s := Score{Path: ref.Path, BPMRef: ref.BPM}
 	if r == nil {
 		s.Error = "no result"
@@ -64,7 +130,8 @@ func score(ref Reference, r *analysis.Result) Score {
 	s.BPM = r.BPM
 	s.BPMDelta = r.BPM - ref.BPM
 	s.Dispute = r.Dispute
-	s.evidence(r)
+	s.PhaseVote, s.PhaseAgreement = r.PhaseVote, r.PhaseAgreement
+	s.RelabelBeats, s.ShiftMs, s.Consensus = r.RelabelBeats, r.ShiftMs, r.Consensus
 	first, ok := firstDownbeat(r)
 	if !ok {
 		s.Error = "grid has no downbeat"
@@ -75,7 +142,7 @@ func score(ref Reference, r *analysis.Result) Score {
 	if bar <= 0 {
 		bar = 4
 	}
-	s.BeatsPerBar, s.BeatsPerBarRef = r.Grid.BeatsPerBar, bar
+	s.BeatsPerBar, s.BeatsPerBarRef = r.BeatsPerBar, bar
 	s.PhaseBeats, s.Bars = phase(float64(first-ref.FirstDownbeatMs)/1000, period(ref, r), bar)
 	// A rekordbox grid often lists its first beat as beat 2, 3 or 4, which
 	// puts its bar 1 before zero (see corpus.Beats). There is no beat there
@@ -90,18 +157,15 @@ func score(ref Reference, r *analysis.Result) Score {
 }
 
 // firstDownbeat is the result's first downbeat: the grid's own field, else
-// the first beat numbered 1, else the first listed downbeat.
-func firstDownbeat(r *analysis.Result) (int, bool) {
-	if r.Grid.FirstDownbeatMs != nil {
-		return *r.Grid.FirstDownbeatMs, true
+// the first beat numbered 1.
+func firstDownbeat(r *Result) (int, bool) {
+	if r.FirstDownbeatMs != nil {
+		return *r.FirstDownbeatMs, true
 	}
 	for _, b := range r.Beats {
 		if b.BeatNumber == 1 {
 			return b.TimeMs, true
 		}
-	}
-	if len(r.Downbeats) > 0 {
-		return r.Downbeats[0].TimeMs, true
 	}
 	return 0, false
 }
@@ -109,7 +173,7 @@ func firstDownbeat(r *analysis.Result) (int, bool) {
 // period is the reference's beat length in seconds, the ruler the offset
 // is measured with; the result's median beat spacing when the reference
 // has no tempo.
-func period(ref Reference, r *analysis.Result) float64 {
+func period(ref Reference, r *Result) float64 {
 	if ref.BPM > 0 {
 		return 60 / ref.BPM
 	}
@@ -148,31 +212,4 @@ func phase(offsetSeconds, periodSeconds float64, beatsPerBar int) (beats float64
 		beats += bar
 	}
 	return beats, int(math.Round((total - beats) / bar))
-}
-
-// evidence copies the cross-checker's vote and the arbitration record off
-// a fresh result's config; a stored grid has none.
-func (s *Score) evidence(r *analysis.Result) {
-	if r.Config == nil {
-		return
-	}
-	if bt, ok := r.Config["beat_this"].(map[string]any); ok {
-		s.PhaseVote = asInt(bt["phase_vote"])
-		s.PhaseAgreement, _ = bt["phase_agreement"].(float64)
-	}
-	s.RelabelBeats = asInt(r.Config["arbitration_relabel_beats"])
-	s.ShiftMs = asInt(r.Config["arbitration_shift_ms"])
-	s.Consensus, _ = r.Config["consensus"].(string)
-}
-
-func asInt(v any) int {
-	switch n := v.(type) {
-	case int:
-		return n
-	case int64:
-		return int(n)
-	case float64:
-		return int(n)
-	}
-	return 0
 }

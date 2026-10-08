@@ -3,8 +3,6 @@ package main
 import (
 	"math"
 	"testing"
-
-	"github.com/csquared/deadcatalog/analysis"
 )
 
 func TestPhaseFoldsWithinTheBarAndCountsWholeBars(t *testing.T) {
@@ -35,9 +33,9 @@ func TestPhaseFoldsWithinTheBarAndCountsWholeBars(t *testing.T) {
 	}
 }
 
-func result(bpm float64, firstDownbeatMs int, dispute string) *analysis.Result {
+func result(bpm float64, firstDownbeatMs int, dispute string) *Result {
 	first := firstDownbeatMs
-	return &analysis.Result{BPM: bpm, Grid: analysis.Grid{BPM: bpm, FirstDownbeatMs: &first, BeatsPerBar: 4}, Dispute: dispute}
+	return &Result{BPM: bpm, FirstDownbeatMs: &first, BeatsPerBar: 4, Dispute: dispute}
 }
 
 func TestScorePassesOnTheReferenceAndFailsOffIt(t *testing.T) {
@@ -64,11 +62,11 @@ func TestScorePassesOnTheReferenceAndFailsOffIt(t *testing.T) {
 }
 
 func TestFirstDownbeatFallsBackToBeatOne(t *testing.T) {
-	r := &analysis.Result{Beats: []analysis.Beat{{TimeMs: 200, BeatNumber: 3}, {TimeMs: 700, BeatNumber: 4}, {TimeMs: 1200, BeatNumber: 1}}}
+	r := &Result{Beats: []Beat{{TimeMs: 200, BeatNumber: 3}, {TimeMs: 700, BeatNumber: 4}, {TimeMs: 1200, BeatNumber: 1}}}
 	if ms, ok := firstDownbeat(r); !ok || ms != 1200 {
 		t.Errorf("got %d %v", ms, ok)
 	}
-	if _, ok := firstDownbeat(&analysis.Result{}); ok {
+	if _, ok := firstDownbeat(&Result{}); ok {
 		t.Error("nothing to go on should not be a downbeat")
 	}
 }
@@ -86,7 +84,7 @@ func TestScoreRequiresMatchingMeter(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			r := result(120, 1000, "")
-			r.Grid.BeatsPerBar = tt.meter
+			r.BeatsPerBar = tt.meter
 			s := score(Reference{BPM: 120, FirstDownbeatMs: 1000, BeatsPerBar: tt.reference}, r)
 			wantReference := tt.reference
 			if wantReference <= 0 {
@@ -105,7 +103,7 @@ func TestAReferenceBarOneBeforeZeroCountsNoBars(t *testing.T) {
 	// and is in phase with it; the whole bar between them is not a fault.
 	ref := Reference{Path: "a", BPM: 123, FirstDownbeatMs: -949, BeatsPerBar: 4}
 	first := 980
-	r := &analysis.Result{BPM: 123, Grid: analysis.Grid{BPM: 123, BeatsPerBar: 4, FirstDownbeatMs: &first}}
+	r := &Result{BPM: 123, BeatsPerBar: 4, FirstDownbeatMs: &first}
 	s := score(ref, r)
 	if !s.Pass || s.Bars != 0 || math.Abs(s.PhaseBeats) > 0.1 {
 		t.Fatalf("score = %+v, want a pass in phase with no bars off", s)
@@ -113,7 +111,7 @@ func TestAReferenceBarOneBeforeZeroCountsNoBars(t *testing.T) {
 	// With an audible reference bar 1, a grid a bar late still fails.
 	ref.FirstDownbeatMs = 1003
 	late := 1003 + 1951
-	r.Grid.FirstDownbeatMs = &late
+	r.FirstDownbeatMs = &late
 	if s := score(ref, r); s.Pass || s.Bars != 1 {
 		t.Fatalf("score = %+v, want bars +1", s)
 	}

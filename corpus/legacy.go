@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"github.com/csquared/deadcatalog/catalog"
-	_ "modernc.org/sqlite"
 )
 
 // LegacyOptions point ImportLegacy at a DEADCA7 (Go server) library: its
@@ -129,7 +127,7 @@ func ImportLegacy(ctx context.Context, opts LegacyOptions) (Report, error) {
 			id = match.ID
 		}
 		if id == "" {
-			id = catalog.NewUUID()
+			id = newUUID()
 		}
 		out := filepath.Join(opts.Out, "tracks", id+".cdb")
 		verb := "wrote"
@@ -145,7 +143,7 @@ func ImportLegacy(ctx context.Context, opts LegacyOptions) (Report, error) {
 			rep.Merged++
 			verb = "merged"
 		} else {
-			file, err := catalog.CreateFile(out, cat)
+			file, err := createFile(out, cat)
 			if err != nil {
 				return rep, errors.Wrapf(err, "write %s", out)
 			}
@@ -163,14 +161,14 @@ func ImportLegacy(ctx context.Context, opts LegacyOptions) (Report, error) {
 }
 
 // legacyCatalog builds the track-local catalog for one legacy grid.
-func legacyCatalog(t map[string]any, grid legacyGrid, cues legacyCues, match Entry) catalog.Catalog {
+func legacyCatalog(t map[string]any, grid legacyGrid, cues legacyCues, match Entry) contents {
 	now := time.Now().UTC().Format(time.RFC3339)
-	trackUUID := catalog.NewUUID()
-	catalogUUID := catalog.NewUUID()
-	var tables []catalog.Table
+	trackUUID := newUUID()
+	catalogUUID := newUUID()
+	var tables []table
 	artist := str(t["artist"])
 	if artist != "" {
-		tables = append(tables, catalog.Table{Name: "artists", Rows: []map[string]any{{"id": 1, "name": artist}}})
+		tables = append(tables, table{Name: "artists", Rows: []map[string]any{{"id": 1, "name": artist}}})
 	}
 	lengthMs, _ := t["length_ms"].(int64)
 	track := map[string]any{
@@ -189,8 +187,8 @@ func legacyCatalog(t map[string]any, grid legacyGrid, cues legacyCues, match Ent
 	if c := str(t["comment"]); c != "" {
 		track["comment"] = c
 	}
-	tables = append(tables, catalog.Table{Name: "tracks", Rows: []map[string]any{track}})
-	tables = append(tables, catalog.Table{Name: "catalogs", Rows: []map[string]any{{
+	tables = append(tables, table{Name: "tracks", Rows: []map[string]any{track}})
+	tables = append(tables, table{Name: "catalogs", Rows: []map[string]any{{
 		"created_at": now, "kind": "corpus", "name": "deadca7-legacy", "updated_at": now, "uuid": catalogUUID,
 	}}})
 	external := map[string]any{"deadca7_track_id": t["id"]}
@@ -202,7 +200,7 @@ func legacyCatalog(t map[string]any, grid legacyGrid, cues legacyCues, match Ent
 	}
 	ext, _ := json.Marshal(external)
 	obs := map[string]any{
-		"uuid": catalog.NewUUID(), "catalog_uuid": catalogUUID, "track_uuid": trackUUID, "provider": "deadca7",
+		"uuid": newUUID(), "catalog_uuid": catalogUUID, "track_uuid": trackUUID, "provider": "deadca7",
 		"title": str(t["title"]), "duration": lengthMs / 1000, "observed_at": now, "external_ids": string(ext),
 	}
 	if grid.FileHash != "" {
@@ -211,7 +209,7 @@ func legacyCatalog(t map[string]any, grid legacyGrid, cues legacyCues, match Ent
 	if match.FileName != "" {
 		obs["file_name"] = match.FileName
 	}
-	tables = append(tables, catalog.Table{Name: "catalog_tracks", Rows: []map[string]any{obs}})
+	tables = append(tables, table{Name: "catalog_tracks", Rows: []map[string]any{obs}})
 
 	// A grid the person set by hand (beats_src "manual") is theirs, not the
 	// engine's: it goes in as provider "manual" so it can be the truth a run
@@ -224,15 +222,15 @@ func legacyCatalog(t map[string]any, grid legacyGrid, cues legacyCues, match Ent
 		provider, version = "manual", "manual"
 	}
 	analysis := map[string]any{
-		"id": 1, "uuid": catalog.NewUUID(), "track_uuid": trackUUID, "provider": provider, "version": version,
+		"id": 1, "uuid": newUUID(), "track_uuid": trackUUID, "provider": provider, "version": version,
 		"date": firstNonEmpty(str(t["created_at"]), now), "selected": 1,
 	}
 	if match.FileName != "" {
 		analysis["audio_path"] = match.FileName
 	}
-	tables = append(tables, catalog.Table{Name: "analyses", Rows: []map[string]any{analysis}})
-	beats, _ := catalog.EncodeBeatTuples(legacyTuples(grid))
-	tables = append(tables, catalog.Table{Name: "beats", Rows: []map[string]any{{"analysis_id": 1, "beats_json": beats}}})
+	tables = append(tables, table{Name: "analyses", Rows: []map[string]any{analysis}})
+	beats, _ := EncodeBeatTuples(legacyTuples(grid))
+	tables = append(tables, table{Name: "beats", Rows: []map[string]any{{"analysis_id": 1, "beats_json": beats}}})
 	var cueRows []map[string]any
 	for i, c := range cues.Cues {
 		cueRows = append(cueRows, map[string]any{
@@ -241,27 +239,27 @@ func legacyCatalog(t map[string]any, grid legacyGrid, cues legacyCues, match Ent
 		})
 	}
 	if len(cueRows) > 0 {
-		tables = append(tables, catalog.Table{Name: "cues", Rows: cueRows})
+		tables = append(tables, table{Name: "cues", Rows: cueRows})
 	}
 	meta, _ := json.Marshal(map[string]any{
 		"algo_version": grid.AlgoVersion, "cfg_hash": grid.CfgHash, "cfg": grid.Cfg, "bpm": grid.BPM, "raw_bpm": grid.RawBPM,
 		"duration": grid.Duration, "dynamic": grid.Dynamic, "file_hash": grid.FileHash, "samples_hash": grid.SamplesHash,
 		"origin_refine_ms": grid.OriginRefineMs, "anchor": grid.Anchor, "phase": grid.Phase, "source": str(t["beats_src"]),
 	})
-	tables = append(tables, catalog.Table{Name: "analysis_files", Rows: []map[string]any{{"analysis_id": 1, "kind": "grid", "data": meta}}})
-	return catalog.Catalog{Tables: tables}
+	tables = append(tables, table{Name: "analysis_files", Rows: []map[string]any{{"analysis_id": 1, "kind": "grid", "data": meta}}})
+	return contents{Tables: tables}
 }
 
 // legacyTuples turns beat and downbeat seconds into the catalog's
 // [beat_number, tempo_x100, time_ms] tuples. A beat is numbered 1 when a
 // downbeat falls on it, else one past the beat before.
-func legacyTuples(grid legacyGrid) []catalog.BeatTuple {
+func legacyTuples(grid legacyGrid) []BeatTuple {
 	tempo := int64(math.Round(grid.BPM * 100))
 	down := map[int64]bool{}
 	for _, d := range grid.Downbeats {
 		down[int64(math.Round(d*1000))] = true
 	}
-	tuples := make([]catalog.BeatTuple, 0, len(grid.Beats))
+	tuples := make([]BeatTuple, 0, len(grid.Beats))
 	number := int64(0)
 	for _, b := range grid.Beats {
 		ms := int64(math.Round(b * 1000))
@@ -270,7 +268,7 @@ func legacyTuples(grid legacyGrid) []catalog.BeatTuple {
 		} else {
 			number = number%4 + 1
 		}
-		tuples = append(tuples, catalog.BeatTuple{number, tempo, ms})
+		tuples = append(tuples, BeatTuple{number, tempo, ms})
 	}
 	return tuples
 }

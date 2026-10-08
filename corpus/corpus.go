@@ -36,7 +36,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"github.com/csquared/deadcatalog/catalog"
 )
 
 // Entry is one track in the index.
@@ -116,7 +115,7 @@ func Build(ctx context.Context, opts Options) (Report, error) {
 	if opts.From == "" || opts.Out == "" {
 		return rep, errors.New("corpus: -from and -out are required")
 	}
-	src, err := catalog.OpenReadOnly(opts.From)
+	src, err := openReadOnly(opts.From)
 	if err != nil {
 		return rep, err
 	}
@@ -175,7 +174,7 @@ func Build(ctx context.Context, opts Options) (Report, error) {
 					return rep, err
 				}
 			}
-			db, err := catalog.CreateFile(out, cat)
+			db, err := createFile(out, cat)
 			if err != nil {
 				return rep, errors.Wrapf(err, "write %s", out)
 			}
@@ -193,17 +192,17 @@ func Build(ctx context.Context, opts Options) (Report, error) {
 }
 
 // trackCatalog assembles the tables of one track-local catalog.
-func trackCatalog(ctx context.Context, src *sql.DB, track map[string]any, analyses, observations []map[string]any, sourceName string, opts Options) (catalog.Catalog, error) {
+func trackCatalog(ctx context.Context, src *sql.DB, track map[string]any, analyses, observations []map[string]any, sourceName string, opts Options) (contents, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	var tables []catalog.Table
+	var tables []table
 	for _, ref := range []struct{ table, col string }{{"artists", "artist_id"}, {"albums", "album_id"}} {
 		if id, ok := track[ref.col].(int64); ok {
 			r, err := rows(ctx, src, `SELECT * FROM `+ref.table+` WHERE id = ?`, id)
 			if err != nil {
-				return catalog.Catalog{}, err
+				return contents{}, err
 			}
 			if len(r) > 0 {
-				tables = append(tables, catalog.Table{Name: ref.table, Rows: r})
+				tables = append(tables, table{Name: ref.table, Rows: r})
 			}
 		}
 	}
@@ -212,12 +211,12 @@ func trackCatalog(ctx context.Context, src *sql.DB, track map[string]any, analys
 		if id, ok := album.Rows[0]["artist_id"].(int64); ok && !hasRow(findTable(tables, "artists"), id) {
 			r, err := rows(ctx, src, `SELECT * FROM artists WHERE id = ?`, id)
 			if err != nil {
-				return catalog.Catalog{}, err
+				return contents{}, err
 			}
 			if a := findTable(tables, "artists"); a != nil {
 				a.Rows = append(a.Rows, r...)
 			} else if len(r) > 0 {
-				tables = append(tables, catalog.Table{Name: "artists", Rows: r})
+				tables = append(tables, table{Name: "artists", Rows: r})
 			}
 		}
 	}
@@ -235,11 +234,11 @@ func trackCatalog(ctx context.Context, src *sql.DB, track map[string]any, analys
 			}
 		}
 	}
-	tables = append(tables, catalog.Table{Name: "tracks", Rows: []map[string]any{track}})
+	tables = append(tables, table{Name: "tracks", Rows: []map[string]any{track}})
 
 	// One corpus catalog stands for the source; the observations hang off it.
-	catalogUUID := catalog.NewUUID()
-	tables = append(tables, catalog.Table{Name: "catalogs", Rows: []map[string]any{{
+	catalogUUID := newUUID()
+	tables = append(tables, table{Name: "catalogs", Rows: []map[string]any{{
 		"created_at": now, "kind": "corpus", "name": sourceName, "updated_at": now, "uuid": catalogUUID,
 	}}})
 	var obs []map[string]any
@@ -258,7 +257,7 @@ func trackCatalog(ctx context.Context, src *sql.DB, track map[string]any, analys
 		obs = append(obs, o)
 	}
 	if len(obs) > 0 {
-		tables = append(tables, catalog.Table{Name: "catalog_tracks", Rows: obs})
+		tables = append(tables, table{Name: "catalog_tracks", Rows: obs})
 	}
 
 	var an []map[string]any
@@ -271,7 +270,7 @@ func trackCatalog(ctx context.Context, src *sql.DB, track map[string]any, analys
 		}
 		an = append(an, a)
 	}
-	tables = append(tables, catalog.Table{Name: "analyses", Rows: an})
+	tables = append(tables, table{Name: "analyses", Rows: an})
 	ids := make([]any, 0, len(an))
 	marks := make([]string, 0, len(an))
 	for _, a := range an {
@@ -283,20 +282,20 @@ func trackCatalog(ctx context.Context, src *sql.DB, track map[string]any, analys
 	if opts.Waveforms {
 		children = append(children, "waveforms")
 	}
-	for _, table := range children {
-		r, err := rows(ctx, src, `SELECT * FROM `+table+` WHERE analysis_id IN `+in, ids...)
+	for _, name := range children {
+		r, err := rows(ctx, src, `SELECT * FROM `+name+` WHERE analysis_id IN `+in, ids...)
 		if err != nil {
-			return catalog.Catalog{}, err
+			return contents{}, err
 		}
 		if len(r) > 0 {
-			tables = append(tables, catalog.Table{Name: table, Rows: r})
+			tables = append(tables, table{Name: name, Rows: r})
 		}
 	}
 	// analysis_files without data name files on the source device (the
 	// ANLZ set a stick carries); nothing portable is lost dropping them.
 	files, err := rows(ctx, src, `SELECT * FROM analysis_files WHERE analysis_id IN `+in+` AND data IS NOT NULL`, ids...)
 	if err != nil {
-		return catalog.Catalog{}, err
+		return contents{}, err
 	}
 	if len(files) > 0 {
 		for _, f := range files {
@@ -306,9 +305,9 @@ func trackCatalog(ctx context.Context, src *sql.DB, track map[string]any, analys
 				}
 			}
 		}
-		tables = append(tables, catalog.Table{Name: "analysis_files", Rows: files})
+		tables = append(tables, table{Name: "analysis_files", Rows: files})
 	}
-	return catalog.Catalog{Tables: tables}, nil
+	return contents{Tables: tables}, nil
 }
 
 // trackID is the audio file's sha256 when any observation knows it, else
@@ -366,12 +365,12 @@ func fileSHA256(path string) (string, error) {
 // and the source's catalogs row with its observations. Analyses the catalog
 // already carries are left alone, so a rebuild is idempotent. It reports
 // false when there was nothing new.
-func merge(ctx context.Context, path string, incoming catalog.Catalog) (bool, error) {
-	db, err := catalog.OpenReadOnly(path)
+func merge(ctx context.Context, path string, incoming contents) (bool, error) {
+	db, err := openReadOnly(path)
 	if err != nil {
 		return false, err
 	}
-	existing := catalog.Catalog{}
+	existing := contents{}
 	for _, name := range []string{"artists", "albums", "tracks", "catalogs", "catalog_tracks", "analyses", "beats", "cues", "phrases", "vbr_info", "waveforms", "analysis_files"} {
 		query := `SELECT * FROM ` + name
 		if name == "catalogs" {
@@ -383,7 +382,7 @@ func merge(ctx context.Context, path string, incoming catalog.Catalog) (bool, er
 			return false, err
 		}
 		if len(r) > 0 {
-			existing.Tables = append(existing.Tables, catalog.Table{Name: name, Rows: r})
+			existing.Tables = append(existing.Tables, table{Name: name, Rows: r})
 		}
 	}
 	db.Close()
@@ -431,7 +430,7 @@ func merge(ctx context.Context, path string, incoming catalog.Catalog) (bool, er
 		if t := findTable(existing.Tables, name); t != nil {
 			t.Rows = append(t.Rows, rows...)
 		} else {
-			existing.Tables = append(existing.Tables, catalog.Table{Name: name, Rows: rows})
+			existing.Tables = append(existing.Tables, table{Name: name, Rows: rows})
 		}
 	}
 	appendRows("analyses", fresh)
@@ -482,7 +481,7 @@ func merge(ctx context.Context, path string, incoming catalog.Catalog) (bool, er
 	})
 	tmp := path + ".merge"
 	_ = os.Remove(tmp)
-	out, err := catalog.CreateFile(tmp, existing)
+	out, err := createFile(tmp, existing)
 	if err != nil {
 		return false, err
 	}
@@ -546,7 +545,7 @@ func Load(dir string) (Index, error) {
 
 // Describe reads one track catalog into an Entry.
 func Describe(ctx context.Context, path string) (Entry, error) {
-	db, err := catalog.OpenReadOnly(path)
+	db, err := openReadOnly(path)
 	if err != nil {
 		return Entry{}, err
 	}
@@ -605,7 +604,7 @@ func Grids(ctx context.Context, db *sql.DB) ([]Grid, error) {
 			}
 		}
 		if beats := str(a["beats_json"]); beats != "" {
-			tuples, err := catalog.DecodeBeatTuples(beats)
+			tuples, err := DecodeBeatTuples(beats)
 			if err != nil {
 				return nil, err
 			}
@@ -622,7 +621,7 @@ func Grids(ctx context.Context, db *sql.DB) ([]Grid, error) {
 // before the first listed beat. The first downbeat is that bar's, laid back
 // from the first listed beat by its number, so a lattice that agrees beat
 // for beat scores as agreeing; it can be negative.
-func fromBeats(g *Grid, tuples []catalog.BeatTuple) {
+func fromBeats(g *Grid, tuples []BeatTuple) {
 	g.Beats = len(tuples)
 	if len(tuples) == 0 {
 		return
@@ -646,7 +645,7 @@ func fromBeats(g *Grid, tuples []catalog.BeatTuple) {
 }
 
 // Beats reads one analysis's beat tuples from an open track catalog.
-func Beats(ctx context.Context, db *sql.DB, provider string) ([]catalog.BeatTuple, Grid, error) {
+func Beats(ctx context.Context, db *sql.DB, provider string) ([]BeatTuple, Grid, error) {
 	an, err := rows(ctx, db, `SELECT a.id, a.provider, a.version, b.beats_json FROM analyses a JOIN beats b ON b.analysis_id = a.id WHERE a.provider = ? ORDER BY a.selected DESC, a.id DESC LIMIT 1`, provider)
 	if err != nil {
 		return nil, Grid{}, err
@@ -654,7 +653,7 @@ func Beats(ctx context.Context, db *sql.DB, provider string) ([]catalog.BeatTupl
 	if len(an) == 0 {
 		return nil, Grid{}, nil
 	}
-	tuples, err := catalog.DecodeBeatTuples(str(an[0]["beats_json"]))
+	tuples, err := DecodeBeatTuples(str(an[0]["beats_json"]))
 	if err != nil {
 		return nil, Grid{}, err
 	}
@@ -664,7 +663,7 @@ func Beats(ctx context.Context, db *sql.DB, provider string) ([]catalog.BeatTupl
 }
 
 // Open opens a track catalog read-only.
-func Open(path string) (*sql.DB, error) { return catalog.OpenReadOnly(path) }
+func Open(path string) (*sql.DB, error) { return openReadOnly(path) }
 
 func filterProviders(analyses []map[string]any, providers []string) []map[string]any {
 	if len(providers) == 0 {
@@ -682,7 +681,7 @@ func filterProviders(analyses []map[string]any, providers []string) []map[string
 	return kept
 }
 
-// rows runs a query into generic rows, the shape catalog.Table takes.
+// rows runs a query into generic rows, the shape table takes.
 func rows(ctx context.Context, db *sql.DB, query string, args ...any) ([]map[string]any, error) {
 	rs, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -745,7 +744,7 @@ func clone(m map[string]any) map[string]any {
 	return c
 }
 
-func findTable(tables []catalog.Table, name string) *catalog.Table {
+func findTable(tables []table, name string) *table {
 	for i := range tables {
 		if tables[i].Name == name {
 			return &tables[i]
@@ -754,7 +753,7 @@ func findTable(tables []catalog.Table, name string) *catalog.Table {
 	return nil
 }
 
-func hasRow(t *catalog.Table, id int64) bool {
+func hasRow(t *table, id int64) bool {
 	if t == nil {
 		return false
 	}

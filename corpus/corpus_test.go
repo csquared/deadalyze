@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/csquared/deadcatalog/catalog"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -20,17 +19,17 @@ func library(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "Library.cdb")
 	beats := func(firstMs, tempoX100 int64, n int) string {
-		var tuples []catalog.BeatTuple
+		var tuples []BeatTuple
 		period := 6000000 / tempoX100
 		for i := 0; i < n; i++ {
-			tuples = append(tuples, catalog.BeatTuple{int64(i%4 + 1), tempoX100, firstMs + int64(i)*period})
+			tuples = append(tuples, BeatTuple{int64(i%4 + 1), tempoX100, firstMs + int64(i)*period})
 		}
-		s, err := catalog.EncodeBeatTuples(tuples)
+		s, err := EncodeBeatTuples(tuples)
 		require.NoError(t, err)
 		return s
 	}
-	catalogUUID := catalog.NewUUID()
-	cat := catalog.Catalog{Tables: []catalog.Table{
+	catalogUUID := newUUID()
+	cat := contents{Tables: []table{
 		{Name: "artists", Rows: []map[string]any{{"id": 1, "name": "Night Shift"}}},
 		{Name: "tracks", Rows: []map[string]any{
 			{"uuid": "t1", "title": "Alive", "artist_id": 1, "file_name": "01 - Alive.mp3", "file_path": "/Users/x/Music/01 - Alive.mp3", "duration": 180, "tempo": 11700},
@@ -53,7 +52,7 @@ func library(t *testing.T) string {
 		}},
 		{Name: "waveforms", Rows: []map[string]any{{"analysis_id": 1, "waveform_id": 1, "kind": "mono_preview", "data": make([]byte, 400), "entry_bytes": 1, "entry_count": 400, "rate": 150}}},
 	}}
-	db, err := catalog.CreateFile(path, cat)
+	db, err := createFile(path, cat)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 	return path
@@ -125,8 +124,8 @@ func TestBuildAndIndex(t *testing.T) {
 func stick(t *testing.T, audio string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "STICK.cdb")
-	catalogUUID := catalog.NewUUID()
-	cat := catalog.Catalog{Tables: []catalog.Table{
+	catalogUUID := newUUID()
+	cat := contents{Tables: []table{
 		{Name: "tracks", Rows: []map[string]any{{"uuid": "s1", "title": "Alive", "file_name": filepath.Base(audio), "duration": 180}}},
 		{Name: "catalogs", Rows: []map[string]any{{"uuid": catalogUUID, "kind": "devicelib", "name": "STICK", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"}}},
 		{Name: "catalog_tracks", Rows: []map[string]any{{"uuid": "cs1", "catalog_uuid": catalogUUID, "track_uuid": "s1", "provider": "rekordbox", "file_path": audio}}},
@@ -134,7 +133,7 @@ func stick(t *testing.T, audio string) string {
 		{Name: "beats", Rows: []map[string]any{{"analysis_id": 7, "beats_json": `[[1,11700,49],[2,11700,561],[3,11700,1074],[4,11700,1587]]`}}},
 		{Name: "cues", Rows: []map[string]any{{"analysis_id": 7, "cue_index": 0, "kind": "cue", "time_ms": 49, "hot_cue": 0}}},
 	}}
-	db, err := catalog.CreateFile(path, cat)
+	db, err := createFile(path, cat)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 	return path
@@ -160,7 +159,7 @@ func TestMergeAndHash(t *testing.T) {
 
 	// A library whose observation carries that hash merges its deadca7 grid in.
 	lib := library(t)
-	db, err := catalog.OpenReadOnly(lib)
+	db, err := openReadOnly(lib)
 	require.NoError(t, err)
 	db.Close()
 	rewrite(t, lib, `UPDATE catalog_tracks SET audio_sha256 = NULL, file_sha256 = ?`, id)
@@ -222,18 +221,18 @@ func TestBuildKeepsPathsAndWaveformsOnRequest(t *testing.T) {
 func TestFirstDownbeatLaidBack(t *testing.T) {
 	// rekordbox lists beats 2, 3, 4, 1 from 483 ms at 124 BPM: bar 1 is at 0.
 	var g Grid
-	fromBeats(&g, []catalog.BeatTuple{{2, 12400, 483}, {3, 12400, 967}, {4, 12400, 1451}, {1, 12400, 1935}})
+	fromBeats(&g, []BeatTuple{{2, 12400, 483}, {3, 12400, 967}, {4, 12400, 1451}, {1, 12400, 1935}})
 	require.Equal(t, 124.0, g.BPM)
 	require.Equal(t, 4, g.BeatsPerBar)
 	require.InDelta(t, 0, g.FirstDownbeatMs, 1)
 	// A grid that opens on beat 3 after a lead-in: bar 1 lands before zero.
-	fromBeats(&g, []catalog.BeatTuple{{3, 12000, 200}, {4, 12000, 700}, {1, 12000, 1200}})
+	fromBeats(&g, []BeatTuple{{3, 12000, 200}, {4, 12000, 700}, {1, 12000, 1200}})
 	require.Equal(t, -800, g.FirstDownbeatMs)
 }
 
 func TestLegacyTuples(t *testing.T) {
 	g := legacyGrid{BPM: 125, Beats: []float64{0.0457, 0.5257, 1.0057, 1.4857, 1.9657, 2.4457}, Downbeats: []float64{0.0457, 1.9657}}
 	got := legacyTuples(g)
-	require.Equal(t, []catalog.BeatTuple{{1, 12500, 46}, {2, 12500, 526}, {3, 12500, 1006}, {4, 12500, 1486}, {1, 12500, 1966}, {2, 12500, 2446}}, got)
+	require.Equal(t, []BeatTuple{{1, 12500, 46}, {2, 12500, 526}, {3, 12500, 1006}, {4, 12500, 1486}, {1, 12500, 1966}, {2, 12500, 2446}}, got)
 	require.Equal(t, "9a125saylessbreakextendedmixv05", NormalizeName("/Volumes/X/Contents/9A - 125 - SAYLESS - BREAK (extended mix - v05).aiff"))
 }
