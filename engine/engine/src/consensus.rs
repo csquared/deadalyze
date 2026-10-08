@@ -69,7 +69,7 @@ pub fn compare(ours: &LegGrid, other: &LegGrid, s: &Settings) -> String {
         let mut phase = (td - od) / period;
         phase -= (phase / bar - 0.5).ceil() * bar;
         if phase.abs() > s.consensus_max_phase_beats {
-            reasons.push(format!("downbeat {:+.1} beats", phase));
+            reasons.push(format!("downbeat {phase:+.1} beats"));
         }
     }
     reasons.join("; ")

@@ -378,6 +378,7 @@ pub struct Waveform {
 /// One line of `engine analyze` output. `seq` is added by the writer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum Event {
     BatchStarted {
         engine: EngineIdWire,
@@ -533,7 +534,7 @@ pub fn py_float(f: f64) -> String {
     }
     let abs = f.abs();
     if (1e-4..1e16).contains(&abs) {
-        let s = format!("{}", f);
+        let s = format!("{f}");
         if s.contains('.') || s.contains('e') {
             s
         } else {
@@ -541,7 +542,7 @@ pub fn py_float(f: f64) -> String {
         }
     } else {
         // Shortest digits via Rust's {:e}, then Python's exponent spelling.
-        let s = format!("{:e}", f);
+        let s = format!("{f:e}");
         let (mant, exp) = s.split_once('e').unwrap();
         let exp: i32 = exp.parse().unwrap();
         format!("{mant}e{}{:02}", if exp < 0 { "-" } else { "+" }, exp.abs())
