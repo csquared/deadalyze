@@ -42,7 +42,7 @@ parsed, except that a host may keep its tail for an error message.
 
 ```json
 {"protocols": [1],
- "engine": {"impl": "deadca7-engine-rs", "version": "0.1.0"},
+ "engine": {"impl": "deadca7-engine", "version": "0.1.0"},
  "recipe": "deadca7-v2",
  "runtime_version": "ml-v0.3.0",
  "tasks": ["grid", "key", "features", "waveform", "cues"],
@@ -128,7 +128,7 @@ know.
 | event | fields |
 |-------|--------|
 | `batch_started` | `engine`, `recipe`, `runtime_version`, `settings` (as resolved: defaults filled, `device` chosen), `items` (ids accepted) |
-| `item_started` | `duration_ms` (from the container, for a first paint) |
+| `item_started` | `duration_ms` (from the container, for a first paint; absent when no audio is read) |
 | `waveform_frame` | `offset` (columns from the start), `columns`, `columns_per_second` (150), `data` (3 bytes a column: low, mid, high on 0..127). Provisional, in order, about a second at a time, while the audio decodes |
 | `waveform` | one per kind: `kind`, `entry_bytes`, `entry_count`, `rate`, `source`, `data`; the first for an id also carries `duration_ms` and `band_scales` |
 | `grid` | below |
@@ -191,7 +191,7 @@ carries a `note`.
               "decoder": "ffmpeg-7.1",
               "identity_hash": "c0…"},
  "ran_on": {"device": "mps", "runtime_version": "ml-v0.3.0",
-            "engine": {"impl": "deadca7-engine-rs", "version": "0.1.0"}},
+            "engine": {"impl": "deadca7-engine", "version": "0.1.0"}},
  "consensus": {"verdict": "agreed",
                "shift_ms": 0, "relabel_beats": 1,
                "beat_this": {"bpm": 126.0, "first_beat_ms": 213, "phase_vote": 1,
@@ -222,6 +222,11 @@ carries a `note`.
 A host stores `identity`, `ran_on`, `timeline`, `consensus` and
 `provenance` together as the grid's provenance file
 (`analysis_files/grid`), and `consensus.dispute` as `analysis_files/dispute`.
+That file already has a `timeline` (the name, a string) and a `consensus`
+(the verdict, a string) from the previous recipe, which older readers
+still read; the structured objects go in as `engine_timeline` and
+`engine_consensus`, `identity`, `ran_on`, `provenance` and `recipe` under
+their own names.
 
 ### Identity rules
 
