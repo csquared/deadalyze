@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -62,6 +63,7 @@ func run() error {
 		update    = flag.Bool("update", false, "folder mode: write the current grids as the references instead of scoring them")
 		jsonOut   = flag.String("json", "", "also write the scores as JSON here")
 		limit     = flag.Int("n", 0, "score only the first n tracks (0: all)")
+		source    = flag.String("source", "", "corpus: score only the tracks from this source (an index entry's source, by prefix)")
 	)
 	flag.Parse()
 	ctx := context.Background()
@@ -69,7 +71,7 @@ func run() error {
 	var err error
 	switch {
 	case *corpusDir != "":
-		scores, err = scoreCorpus(ctx, *corpusDir, *truth, *provider, *fresh, *audioDir, *limit)
+		scores, err = scoreCorpus(ctx, *corpusDir, *truth, *provider, *fresh, *audioDir, *source, *limit)
 	case *audio != "" || *refsPath != "":
 		return folderMode(ctx, *audio, *refsPath, *update, *jsonOut)
 	default:
@@ -83,7 +85,7 @@ func run() error {
 }
 
 // scoreCorpus scores one provider's grids against another's, track by track.
-func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, audioDir string, limit int) ([]Score, error) {
+func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, audioDir, source string, limit int) ([]Score, error) {
 	idx, err := corpus.Load(dir)
 	if err != nil {
 		return nil, err
@@ -96,9 +98,18 @@ func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, a
 	}
 	var scores []Score
 	skipped := 0
+	// A fresh run is one batch: the models load once for every track rather
+	// than once a track, which was most of the twenty seconds a file. The
+	// references are gathered first, then the batch runs, then each result
+	// is scored as it lands.
+	var paths []string
+	refs := map[string]Reference{}
 	for _, e := range idx.Tracks {
-		if limit > 0 && len(scores) >= limit {
+		if limit > 0 && len(scores)+len(paths) >= limit {
 			break
+		}
+		if source != "" && !strings.HasPrefix(e.Source, source) {
+			continue
 		}
 		db, err := corpus.Open(filepath.Join(dir, e.File))
 		if err != nil {
@@ -114,42 +125,68 @@ func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, a
 			skipped++
 			continue
 		}
-		started := time.Now()
-		var result *analysis.Result
 		if fresh {
 			path := audioPath(ctx, db, e, byName)
+			db.Close()
 			if path == "" {
-				db.Close()
 				skipped++
 				continue
 			}
-			result, err = engine.Analyze(ctx, path)
-			if err != nil {
-				return nil, errors.Errorf("%s: %w", e.FileName, err)
-			}
-		} else {
-			tuples, g, err := corpus.Beats(ctx, db, provider)
-			if err != nil {
-				db.Close()
-				return nil, err
-			}
-			if len(tuples) == 0 {
-				db.Close()
-				skipped++
-				continue
-			}
-			result = resultFromBeats(tuples, g)
+			paths = append(paths, path)
+			refs[path] = ref
+			continue
 		}
+		started := time.Now()
+		tuples, g, err := corpus.Beats(ctx, db, provider)
 		db.Close()
-		s := score(ref, result)
+		if err != nil {
+			return nil, err
+		}
+		if len(tuples) == 0 {
+			skipped++
+			continue
+		}
+		s := score(ref, resultFromBeats(tuples, g))
 		s.Duration = time.Since(started).Seconds()
 		scores = append(scores, s)
 		fmt.Println(s.line())
+	}
+	if fresh && len(paths) > 0 {
+		scores = append(scores, scoreFresh(ctx, paths, refs)...)
 	}
 	if skipped > 0 {
 		fmt.Printf("grideval: %d track(s) skipped (no %s reference, no %s grid, or no audio)\n", skipped, truth, provider)
 	}
 	return scores, nil
+}
+
+// scoreFresh analyses the paths as one batch and scores each as it
+// completes. The key detector is off: scoring reads the grid only. A track
+// the engine fails is a scored error, never the end of the run.
+func scoreFresh(ctx context.Context, paths []string, refs map[string]Reference) []Score {
+	var scores []Score
+	started := time.Now()
+	last := started
+	engine.AnalyzeBatch(ctx, paths, engine.Options{NoKey: true}, func(done, total int, path string, result *analysis.Result, err error) {
+		now := time.Now()
+		ref := refs[path]
+		var s Score
+		if err != nil {
+			s = Score{Path: ref.Path, BPMRef: ref.BPM, Error: err.Error()}
+		} else {
+			s = score(ref, result)
+		}
+		// The batch overlaps tracks, so the per-track figure is the time
+		// since the previous result: the batch's throughput, not a latency.
+		s.Duration = now.Sub(last).Seconds()
+		last = now
+		scores = append(scores, s)
+		fmt.Printf("[%d/%d] %s\n", done, total, s.line())
+	})
+	if n := len(scores); n > 0 {
+		fmt.Printf("grideval: %d track(s) in %.0fs, %.1fs a track\n", n, time.Since(started).Seconds(), time.Since(started).Seconds()/float64(n))
+	}
+	return scores
 }
 
 // reference is the truth provider's grid for a track, as a Reference. The
@@ -245,9 +282,76 @@ func report(scores []Score, jsonOut string) error {
 	}
 	fmt.Printf("grideval: %d of %d pass, %d disputed\n", len(scores)-failed, len(scores), disputed)
 	if failed > 0 {
+		fmt.Print(breakdown(scores))
 		return errors.Errorf("%d grid(s) off the reference", failed)
 	}
 	return nil
+}
+
+// breakdown counts the failures by what went wrong, in the order a fix
+// would address them: an error, the meter, the tempo (and whether it is the
+// reference's double or half), then the phase (a beat, half a beat, half a
+// bar) and finally whole bars.
+func breakdown(scores []Score) string {
+	counts := map[string]int{}
+	var order []string
+	add := func(k string) {
+		if counts[k] == 0 {
+			order = append(order, k)
+		}
+		counts[k]++
+	}
+	for _, s := range scores {
+		if s.Pass {
+			continue
+		}
+		add(failureClass(s))
+	}
+	sort.SliceStable(order, func(i, j int) bool { return counts[order[i]] > counts[order[j]] })
+	var b strings.Builder
+	for _, k := range order {
+		fmt.Fprintf(&b, "  %5d  %s\n", counts[k], k)
+	}
+	return b.String()
+}
+
+func failureClass(s Score) string {
+	switch {
+	case s.Error != "":
+		return "error"
+	case s.BeatsPerBar != s.BeatsPerBarRef:
+		return "meter"
+	case math.Abs(s.BPMDelta) > maxBPMDelta:
+		ratio := 0.0
+		if s.BPMRef > 0 {
+			ratio = s.BPM / s.BPMRef
+		}
+		switch {
+		case math.Abs(ratio-2) < 0.02:
+			return "tempo: double"
+		case math.Abs(ratio-0.5) < 0.005:
+			return "tempo: half"
+		case math.Abs(ratio-1.5) < 0.02 || math.Abs(ratio-2.0/3) < 0.01:
+			return "tempo: 3:2"
+		case math.Abs(s.BPMDelta) <= 2:
+			return "tempo: near (within 2 BPM)"
+		}
+		return "tempo: other"
+	case math.Abs(s.PhaseBeats) > maxPhaseBeats:
+		p := math.Abs(s.PhaseBeats)
+		switch {
+		case math.Abs(p-math.Round(p)) <= maxPhaseBeats && math.Round(p) == 2:
+			return "phase: half a bar"
+		case math.Abs(p-math.Round(p)) <= maxPhaseBeats:
+			return fmt.Sprintf("phase: %d beat(s)", int(math.Round(p)))
+		case math.Abs(p-0.5) <= 0.1:
+			return "phase: half a beat"
+		}
+		return "phase: fraction"
+	case s.Bars != 0:
+		return "bars: whole bars off"
+	}
+	return "other"
 }
 
 // folderMode is deadcatalog's harness: audio files and a hand-reviewed refs.json.
