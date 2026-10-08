@@ -260,6 +260,103 @@ pub fn run(bundle: &Bundle, req: &Request, out: Out) -> (u32, u32) {
         })
     };
 
+    // Keys on their own thread, beside the grid legs: the model loaded
+    // once, over the items that asked. madmom runs on the CPU while the
+    // grid legs hold the device, so a single track pays for one of them,
+    // and the key lands before the grid does.
+    let key_items: Vec<(String, String)> = req
+        .items
+        .iter()
+        .filter(|i| wants(i, Task::Key))
+        .map(|i| (i.id.clone(), i.audio.clone()))
+        .collect();
+    let key_version = algo_version(&manifests, "key", "madmom-key-cnn-2018");
+    let key_thread = {
+        let shared = shared.clone();
+        let bundle = bundle.clone();
+        let device = device.clone();
+        let version = key_version;
+        std::thread::spawn(move || {
+            if key_items.is_empty() || crate::procguard::cancelled() {
+                return;
+            }
+            let o = &shared.out;
+            let total = key_items.len() as u32;
+            let mut n = 0;
+            let res = legs::run_batch(
+                &bundle,
+                "key",
+                &["--device".to_string(), device],
+                &key_items,
+                |id, r| {
+                    n += 1;
+                    let key = match r {
+                        Ok(v) => {
+                            let label = v
+                                .get("label")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            let camelot = camelot::camelot(&label);
+                            Key {
+                                camelot: camelot.clone(),
+                                label,
+                                confidence: v
+                                    .get("confidence")
+                                    .and_then(Value::as_f64)
+                                    .unwrap_or(0.0),
+                                top: v
+                                    .get("top")
+                                    .and_then(Value::as_array)
+                                    .map(|a| {
+                                        a.iter()
+                                            .map(|c| KeyCandidate {
+                                                label: c
+                                                    .get("label")
+                                                    .and_then(Value::as_str)
+                                                    .unwrap_or("")
+                                                    .into(),
+                                                p: c.get("p")
+                                                    .and_then(Value::as_f64)
+                                                    .unwrap_or(0.0),
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default(),
+                                algo_version: v
+                                    .get("algo_version")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or(&version)
+                                    .to_string(),
+                                note: camelot.is_empty().then(|| "no recognized key".to_string()),
+                            }
+                        }
+                        Err(e) => {
+                            o.warning(id, Task::Key, Code::LegUnavailable, e.clone());
+                            Key {
+                                camelot: "".into(),
+                                label: "".into(),
+                                confidence: 0.0,
+                                top: vec![],
+                                algo_version: version.clone(),
+                                note: Some(format!("unavailable: {e}")),
+                            }
+                        }
+                    };
+                    o.emit(Event::Key {
+                        id: id.to_string(),
+                        key,
+                    });
+                    shared.set(id, Task::Key, TaskOutcome::Ok);
+                    o.progress("key", n, total);
+                },
+            );
+            if let Err(e) = res {
+                eprintln!("engine: key: {e}");
+            }
+        })
+    };
+
     // The grid legs, on this thread.
     let grid_items: Vec<(String, String)> = req
         .items
@@ -469,86 +566,7 @@ pub fn run(bundle: &Bundle, req: &Request, out: Out) -> (u32, u32) {
         }
     }
 
-    // Keys, the model loaded once, over the items that asked.
-    let key_items: Vec<(String, String)> = req
-        .items
-        .iter()
-        .filter(|i| wants(i, Task::Key))
-        .map(|i| (i.id.clone(), i.audio.clone()))
-        .collect();
-    if !key_items.is_empty() && !crate::procguard::cancelled() {
-        let o = &shared.out;
-        let version = algo_version(&manifests, "key", "madmom-key-cnn-2018");
-        let total = key_items.len() as u32;
-        let mut n = 0;
-        let res = legs::run_batch(
-            bundle,
-            "key",
-            &["--device".to_string(), device.clone()],
-            &key_items,
-            |id, r| {
-                n += 1;
-                let key = match r {
-                    Ok(v) => {
-                        let label = v
-                            .get("label")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_string();
-                        let camelot = camelot::camelot(&label);
-                        Key {
-                            camelot: camelot.clone(),
-                            label,
-                            confidence: v.get("confidence").and_then(Value::as_f64).unwrap_or(0.0),
-                            top: v
-                                .get("top")
-                                .and_then(Value::as_array)
-                                .map(|a| {
-                                    a.iter()
-                                        .map(|c| KeyCandidate {
-                                            label: c
-                                                .get("label")
-                                                .and_then(Value::as_str)
-                                                .unwrap_or("")
-                                                .into(),
-                                            p: c.get("p").and_then(Value::as_f64).unwrap_or(0.0),
-                                        })
-                                        .collect()
-                                })
-                                .unwrap_or_default(),
-                            algo_version: v
-                                .get("algo_version")
-                                .and_then(Value::as_str)
-                                .unwrap_or(&version)
-                                .to_string(),
-                            note: camelot.is_empty().then(|| "no recognized key".to_string()),
-                        }
-                    }
-                    Err(e) => {
-                        o.warning(id, Task::Key, Code::LegUnavailable, e.clone());
-                        Key {
-                            camelot: "".into(),
-                            label: "".into(),
-                            confidence: 0.0,
-                            top: vec![],
-                            algo_version: version.clone(),
-                            note: Some(format!("unavailable: {e}")),
-                        }
-                    }
-                };
-                o.emit(Event::Key {
-                    id: id.to_string(),
-                    key,
-                });
-                shared.set(id, Task::Key, TaskOutcome::Ok);
-                o.progress("key", n, total);
-            },
-        );
-        if let Err(e) = res {
-            eprintln!("engine: key: {e}");
-        }
-    }
-
+    let _ = key_thread.join();
     let _ = wave_thread.join();
     let _ = feature_thread.join();
 

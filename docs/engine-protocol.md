@@ -143,10 +143,12 @@ know.
 | `batch_error` | `code`, `message`: the request itself was refused; no item events follow |
 
 Results stream as they are made, not when the batch ends. The engine runs
-BeatNet over the batch, Beat This over the batch, arbitrates, then the key
-pass, with waveforms and features drawn beside the model passes; an item's
-`grid` goes out the moment its second leg lands, and its `item_done` when
-its last task does. A host writes a track when it sees `item_done`.
+BeatNet over the batch, Beat This over the batch and arbitrates, with the
+key pass, the waveforms and the features drawn beside the grid legs on
+their own threads (the key leg is CPU work; the grid legs hold the device);
+an item's `grid` goes out the moment its second leg lands, its `key` when
+the key pass reaches it (before or after the grid), and its `item_done`
+when its last task does. A host writes a track when it sees `item_done`.
 
 Waveform streaming is part of the contract, not an optimisation: for an
 item with the `waveform` task the engine emits `waveform_frame` events
