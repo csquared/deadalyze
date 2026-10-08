@@ -1,20 +1,74 @@
 {
   "name": "beatnet",
   "kind": "grid",
-  "algo_version": "beatnet-dbn-v14",
+  "algo_version": "beatnet-dbn-v15",
   "runner": "runner.py",
   "summary": "BeatNet (CRNN + madmom DBN) fitted to a constant-tempo lattice: the primary leg of the deadca7 engine.",
-  "inputs": ["--audio PATH", "--items JSON"],
+  "inputs": [
+    "--audio PATH",
+    "--items JSON"
+  ],
   "flags": {
-    "--min-bpm": {"default": 70, "setting": "min_bpm"},
-    "--max-bpm": {"default": 150, "setting": "max_bpm"},
-    "--beats-per-bar": {"default": 4, "setting": "beats_per_bar"},
-    "--model": {"default": 1},
-    "--device": {"default": "cpu"},
-    "--no-refine": {"default": false},
-    "--origin-frame-snap": {"default": 0},
-    "--ffmpeg": {"default": "ffmpeg"}
+    "--min-bpm": {
+      "default": 70,
+      "setting": "min_bpm"
+    },
+    "--max-bpm": {
+      "default": 150,
+      "setting": "max_bpm"
+    },
+    "--beats-per-bar": {
+      "default": 4,
+      "setting": "beats_per_bar"
+    },
+    "--model": {
+      "default": 1
+    },
+    "--device": {
+      "default": "cpu",
+      "setting": "device",
+      "identity": false
+    },
+    "--no-refine": {
+      "default": false,
+      "setting": "origin_refine (inverted)"
+    },
+    "--origin-frame-snap": {
+      "default": 0
+    },
+    "--ffmpeg": {
+      "default": "ffmpeg"
+    }
   },
   "output": "grid",
-  "requires": {"python": ["BeatNet", "madmom", "librosa", "numpy", "torch"], "tools": ["ffmpeg"]}
+  "requires": {
+    "python": [
+      "BeatNet",
+      "madmom",
+      "librosa",
+      "numpy",
+      "torch"
+    ],
+    "tools": [
+      "ffmpeg"
+    ]
+  },
+  "identity": {
+    "note": "cfg_hash = sha256 of the canonical JSON of these keys (docs/engine-protocol.md, Identity rules); device and paths are out.",
+    "keys": [
+      "anchor_max_bpm",
+      "anchor_min_bpm",
+      "anchor_step_beats",
+      "anchor_window_beats",
+      "beats_per_bar",
+      "bpm_drift_tolerance",
+      "inference_model",
+      "mode",
+      "model",
+      "origin_frame_snap",
+      "origin_refine",
+      "post_candidates",
+      "strategy"
+    ]
+  }
 }

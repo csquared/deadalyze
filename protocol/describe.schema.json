@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deadca7.com/protocol/1/describe.schema.json",
+  "title": "engine describe",
+  "description": "What an engine answers to `engine describe`: the protocols it speaks, its identity, the tasks and legs it has, and the settings a UI can render. See docs/engine-protocol.md.",
+  "type": "object",
+  "required": ["protocols", "engine", "recipe", "tasks", "commands", "legs", "settings_schema", "limits"],
+  "properties": {
+    "protocols": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1},
+    "engine": {"$ref": "#/$defs/engine"},
+    "recipe": {"type": "string", "pattern": "^deadca7-v[0-9]+$"},
+    "runtime_version": {"type": "string"},
+    "tasks": {"type": "array", "items": {"$ref": "#/$defs/task"}, "uniqueItems": true},
+    "commands": {"type": "array", "items": {"enum": ["describe", "analyze", "stems", "embed"]}, "uniqueItems": true},
+    "legs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["algo_version", "impl", "ready"],
+        "properties": {
+          "algo_version": {"type": "string"},
+          "impl": {"enum": ["python", "native"]},
+          "ready": {"type": "boolean"},
+          "note": {"type": "string"}
+        }
+      }
+    },
+    "decoder": {"type": "object", "required": ["tool", "version"], "properties": {"tool": {"type": "string"}, "version": {"type": "string"}}},
+    "devices": {"type": "array", "items": {"type": "string"}},
+    "limits": {
+      "type": "object",
+      "required": ["max_batch_items", "max_line_bytes"],
+      "properties": {
+        "max_batch_items": {"type": "integer", "minimum": 1},
+        "max_line_bytes": {"type": "integer", "minimum": 65536}
+      }
+    },
+    "settings_schema": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type", "default", "group", "affects_identity"],
+        "properties": {
+          "type": {"enum": ["integer", "number", "string", "boolean"]},
+          "default": {},
+          "title": {"type": "string"},
+          "unit": {"type": "string"},
+          "minimum": {"type": "number"},
+          "maximum": {"type": "number"},
+          "step": {"type": "number"},
+          "enum": {"type": "array"},
+          "group": {"enum": ["grid", "recipe", "key", "features", "cues", "waveform", "runtime"]},
+          "affects_identity": {"type": "boolean"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "engine": {
+      "type": "object",
+      "required": ["impl", "version"],
+      "properties": {"impl": {"type": "string"}, "version": {"type": "string"}}
+    },
+    "task": {"enum": ["grid", "key", "features", "waveform", "cues"]}
+  }
+}

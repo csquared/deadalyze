@@ -1,18 +1,60 @@
 {
   "name": "beat_this",
   "kind": "grid",
-  "algo_version": "beat-this-v1",
+  "algo_version": "beat-this-v2",
   "runner": "runner.py",
   "summary": "Beat This! (ISMIR 2024) fitted to a constant-tempo lattice: the cross-check leg, whose raw downbeats vote on bar phase.",
-  "inputs": ["--audio PATH", "--items JSON"],
+  "inputs": [
+    "--audio PATH",
+    "--items JSON"
+  ],
   "flags": {
-    "--beats-per-bar": {"default": 4, "setting": "beats_per_bar"},
-    "--model": {"default": "final0", "note": "a name the library knows, or a path to a bundled checkpoint (beatthis/final0.ckpt)"},
-    "--device": {"default": "cpu"},
-    "--no-refine": {"default": false},
-    "--origin-frame-snap": {"default": 0},
-    "--ffmpeg": {"default": "ffmpeg"}
+    "--beats-per-bar": {
+      "default": 4,
+      "setting": "beats_per_bar"
+    },
+    "--model": {
+      "default": "final0",
+      "note": "a name the library knows, or a path to a bundled checkpoint (beatthis/final0.ckpt)"
+    },
+    "--device": {
+      "default": "cpu",
+      "setting": "device",
+      "identity": false
+    },
+    "--no-refine": {
+      "default": false,
+      "setting": "origin_refine (inverted)"
+    },
+    "--origin-frame-snap": {
+      "default": 0
+    },
+    "--ffmpeg": {
+      "default": "ffmpeg"
+    }
   },
   "output": "grid",
-  "requires": {"python": ["beat_this", "soundfile", "numpy", "torch"], "tools": ["ffmpeg"], "checkpoints": ["beatthis/final0.ckpt"]}
+  "requires": {
+    "python": [
+      "beat_this",
+      "soundfile",
+      "numpy",
+      "torch"
+    ],
+    "tools": [
+      "ffmpeg"
+    ],
+    "checkpoints": [
+      "beatthis/final0.ckpt"
+    ]
+  },
+  "identity": {
+    "note": "cfg_hash = sha256 of the canonical JSON of these keys; model is the checkpoint's name (final0), never its path.",
+    "keys": [
+      "beats_per_bar",
+      "model",
+      "origin_frame_snap",
+      "origin_refine"
+    ]
+  }
 }

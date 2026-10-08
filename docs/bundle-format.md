@@ -57,14 +57,22 @@ and these paths. A host validates a root by three of them: `python/bin/python3`,
 | `tools/ffmpeg`, `tools/ffprobe` | static builds; the hosts prefer these to PATH          | 1      |
 | `algos/<name>/runner.py`, `algos/<name>/algo.json` | the algorithms, see `../algos`      | 2      |
 | `settings/*.json`       | the settings files, see `../settings`                          | 2      |
+| `bin/engine`            | the engine: what a layout-3 host runs, see `engine-protocol.md` | 3     |
 
-The hosts run a runner as
+A layout-3 host runs the engine, with the bundle root as its working
+directory, and nothing else:
+
+    bin/engine describe
+    bin/engine analyze < request.json
+
+The engine runs a runner as
 
     python/bin/python3 <runner> <flags>
     PYTHONPATH=analysis/lib:lib  PYTHONNOUSERSITE=1
 
-(stems with `PYTHONPATH=stems/lib:lib`). Nothing in the bundle is imported
-from anywhere else, and nothing reaches the network: `build.sh` proves the
+(stems with `PYTHONPATH=stems/lib:lib`), which is also how a layout-1 host
+still runs its embedded copy. Nothing in the bundle is imported from
+anywhere else, and nothing reaches the network: `build.sh` proves the
 embed tower answers with `HF_HUB_OFFLINE=1` before it archives.
 
 On macOS every Mach-O file is signed with the Developer ID when one is in the
@@ -81,7 +89,7 @@ hard-codes a layout. `layout` says which generation it is.
   "name": "deadca7-ml",
   "version": "ml-v0.2.0",
   "platform": "darwin/arm64",
-  "layout": 2,
+  "layout": 3,
   "created_at": "2026-10-08T00:00:00Z",
   "python": "python/bin/python3",
   "lib": "lib",
@@ -89,6 +97,9 @@ hard-codes a layout. `layout` says which generation it is.
   "algos": "algos",
   "algo_names": ["beat_this", "beatnet", "cues", "features", "key"],
   "settings": "settings",
+  "engine": "bin/engine",
+  "protocols": [1],
+  "recipe": "deadca7-v2",
   "beatthis_script": "beatthis/grid.py",
   "beatthis_checkpoint": "beatthis/final0.ckpt",
   "embed_hfcache": "embed/hfcache",
@@ -101,11 +112,13 @@ hard-codes a layout. `layout` says which generation it is.
 }
 ```
 
-Layout 2 is layout 1 plus `algos`, `algo_names` and `settings`. Every
-layout-1 key keeps its name and meaning, so a layout-1 host (DEADCA7 and
-deadcatalog today) installs a layout-2 bundle and reads it unchanged. A host
-that knows layout 2 may run the bundle's `algos/<name>/runner.py` instead of
-its embedded copy, and may offer `settings/` in its UI.
+Layout 2 is layout 1 plus `algos`, `algo_names` and `settings`. Layout 3
+is layout 2 plus `engine`, `protocols` and `recipe`. Every layout-1 key
+keeps its name and meaning, so a layout-1 host (DEADCA7 and deadcatalog
+before their cutover) installs a layout-3 bundle and reads it unchanged. A
+host that knows layout 3 runs `engine` and nothing else; `protocols` says
+which protocol versions it speaks and `recipe` which recipe it carries, so
+a host can refuse a bundle before launching it.
 
 ## Versions
 
@@ -114,8 +127,8 @@ Three things version independently and a grid names all three:
 - the bundle: `ml-vX.Y.Z`, the runtime tag (`RuntimeVersion` on a result);
 - the algorithm: `algo_version` inside the runner (`beatnet-dbn-v14`), plus
   the `cfg_hash` of the tunables it ran with;
-- the recipe: deadcatalog's `AnalysisVersion` (`deadca7-v1`), which says how
-  the engine arbitrates the runners into one answer.
+- the recipe: the engine's (`deadca7-v2`), which says how the engine
+  arbitrates the legs into one answer; a host stores it, never defines it.
 
 A bundle release that changes no algorithm bumps the patch; one that adds an
 algorithm or a dependency bumps the minor; one that changes a layout-1 path

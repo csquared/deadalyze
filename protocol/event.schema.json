@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deadca7.com/protocol/1/event.schema.json",
+  "title": "engine event",
+  "description": "One line of `engine analyze` output. Every line has `event` and `seq`; item events have `id`. See docs/engine-protocol.md.",
+  "type": "object",
+  "required": ["event", "seq"],
+  "properties": {
+    "event": {"type": "string"},
+    "seq": {"type": "integer", "minimum": 1}
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/batch_started"},
+    {"$ref": "#/$defs/batch_done"},
+    {"$ref": "#/$defs/batch_error"},
+    {"$ref": "#/$defs/progress"},
+    {"$ref": "#/$defs/item_started"},
+    {"$ref": "#/$defs/waveform_frame"},
+    {"$ref": "#/$defs/waveform"},
+    {"$ref": "#/$defs/grid"},
+    {"$ref": "#/$defs/key"},
+    {"$ref": "#/$defs/features"},
+    {"$ref": "#/$defs/cues"},
+    {"$ref": "#/$defs/stems"},
+    {"$ref": "#/$defs/embedding"},
+    {"$ref": "#/$defs/item_warning"},
+    {"$ref": "#/$defs/item_error"},
+    {"$ref": "#/$defs/item_done"}
+  ],
+  "$defs": {
+    "id": {"type": "string", "minLength": 1},
+    "code": {"enum": ["invalid_request", "unsupported_protocol", "unsupported_task", "audio_missing", "decode_failed", "model_load_failed", "grid_failed", "leg_unavailable", "cancelled", "engine_crashed", "internal"]},
+    "task": {"enum": ["grid", "key", "features", "waveform", "cues", "stems", "embed"]},
+    "blob": {
+      "type": "object",
+      "oneOf": [
+        {"required": ["b64"], "properties": {"b64": {"type": "string", "contentEncoding": "base64"}}},
+        {"required": ["path"], "properties": {"path": {"type": "string", "minLength": 1}}}
+      ]
+    },
+    "engine": {"type": "object", "required": ["impl", "version"], "properties": {"impl": {"type": "string"}, "version": {"type": "string"}}},
+    "leg_identity": {"type": "object", "required": ["algo_version", "cfg_hash"], "properties": {"algo_version": {"type": "string"}, "cfg_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+
+    "batch_started": {
+      "properties": {"event": {"const": "batch_started"}, "engine": {"$ref": "#/$defs/engine"}, "recipe": {"type": "string"}, "runtime_version": {"type": "string"}, "settings": {"type": "object"}, "items": {"type": "array", "items": {"$ref": "#/$defs/id"}}},
+      "required": ["event", "engine", "recipe", "settings", "items"]
+    },
+    "batch_done": {
+      "properties": {"event": {"const": "batch_done"}, "items": {"type": "integer"}, "ok": {"type": "integer"}, "failed": {"type": "integer"}, "elapsed_ms": {"type": "integer"}},
+      "required": ["event", "items", "ok", "failed"]
+    },
+    "batch_error": {
+      "properties": {"event": {"const": "batch_error"}, "code": {"$ref": "#/$defs/code"}, "message": {"type": "string"}},
+      "required": ["event", "code", "message"]
+    },
+    "progress": {
+      "properties": {"event": {"const": "progress"}, "stage": {"type": "string"}, "done": {"type": "integer"}, "total": {"type": "integer"}, "id": {"$ref": "#/$defs/id"}},
+      "required": ["event", "stage", "done", "total"]
+    },
+    "item_started": {
+      "properties": {"event": {"const": "item_started"}, "id": {"$ref": "#/$defs/id"}, "duration_ms": {"type": "integer"}},
+      "required": ["event", "id"]
+    },
+    "waveform_frame": {
+      "properties": {"event": {"const": "waveform_frame"}, "id": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0}, "columns": {"type": "integer", "minimum": 0}, "columns_per_second": {"const": 150}, "data": {"$ref": "#/$defs/blob"}},
+      "required": ["event", "id", "offset", "columns", "columns_per_second", "data"]
+    },
+    "waveform": {
+      "properties": {
+        "event": {"const": "waveform"}, "id": {"$ref": "#/$defs/id"},
+        "kind": {"enum": ["mono_preview", "mono_detail", "color_preview", "color_detail", "three_band_preview", "three_band_detail", "three_band_scales"]},
+        "entry_bytes": {"type": "integer", "minimum": 1}, "entry_count": {"type": "integer", "minimum": 0}, "rate": {"type": "integer", "minimum": 0},
+        "source": {"enum": ["dat", "ext", "twoex"]}, "data": {"$ref": "#/$defs/blob"},
+        "duration_ms": {"type": "integer"}, "band_scales": {"type": "array", "items": {"type": "integer"}, "minItems": 3, "maxItems": 3}
+      },
+      "required": ["event", "id", "kind", "entry_bytes", "entry_count", "rate", "source", "data"]
+    },
+    "grid": {
+      "properties": {
+        "event": {"const": "grid"}, "id": {"$ref": "#/$defs/id"},
+        "bpm": {"type": "number", "exclusiveMinimum": 0}, "beats_per_bar": {"type": "integer", "minimum": 1},
+        "beats": {"type": "array", "items": {"type": "array", "prefixItems": [{"type": "integer", "minimum": 1}, {"type": "integer", "minimum": 0}], "minItems": 2, "maxItems": 2}},
+        "first_beat_ms": {"type": "integer"}, "first_downbeat_ms": {"type": "integer"},
+        "timeline": {
+          "type": "object", "required": ["name", "offset_ms", "applied_shift_ms"],
+          "properties": {"name": {"const": "rekordbox"}, "offset_ms": {"type": "number"}, "applied_shift_ms": {"type": "integer"},
+                         "decode": {"type": "object", "properties": {"flags": {"type": "array", "items": {"type": "string"}}, "start_time_s": {"type": "number"}}}}
+        },
+        "identity": {
+          "type": "object", "required": ["recipe", "legs", "decoder", "identity_hash"],
+          "properties": {"recipe": {"type": "string"}, "legs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/leg_identity"}}, "decoder": {"type": "string"}, "identity_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+        },
+        "ran_on": {"type": "object", "properties": {"device": {"type": "string"}, "runtime_version": {"type": "string"}, "engine": {"$ref": "#/$defs/engine"}}},
+        "consensus": {
+          "type": "object", "required": ["verdict"],
+          "properties": {"verdict": {"enum": ["agreed", "disputed", "unavailable", "skipped"]}, "dispute": {"type": "string"}, "shift_ms": {"type": "integer"}, "relabel_beats": {"type": "integer"},
+                         "beat_this": {"type": "object", "properties": {"bpm": {"type": "number"}, "first_beat_ms": {"type": ["integer", "null"]}, "phase_vote": {"type": "integer"}, "phase_agreement": {"type": "number"}, "resid_stdev": {"type": "number"}}}}
+        },
+        "provenance": {"type": "object"}
+      },
+      "required": ["event", "id", "bpm", "beats_per_bar", "beats", "first_beat_ms", "first_downbeat_ms", "timeline", "identity", "ran_on", "consensus"]
+    },
+    "key": {
+      "properties": {"event": {"const": "key"}, "id": {"$ref": "#/$defs/id"}, "camelot": {"type": "string"}, "label": {"type": "string"}, "confidence": {"type": "number"}, "top": {"type": "array", "items": {"type": "object", "properties": {"label": {"type": "string"}, "p": {"type": "number"}}}}, "algo_version": {"type": "string"}, "note": {"type": "string"}},
+      "required": ["event", "id", "camelot", "label", "confidence", "algo_version"]
+    },
+    "features": {
+      "properties": {"event": {"const": "features"}, "id": {"$ref": "#/$defs/id"}, "format": {"const": "dc7f"}, "algo_version": {"type": "string"}, "data": {"$ref": "#/$defs/blob"}},
+      "required": ["event", "id", "format", "algo_version", "data"]
+    },
+    "cues": {
+      "properties": {"event": {"const": "cues"}, "id": {"$ref": "#/$defs/id"}, "algo": {"type": "string"}, "cues": {"type": "array", "items": {"type": "object", "required": ["hot_cue", "time_ms"], "properties": {"comment": {"type": "string"}, "hot_cue": {"type": "integer", "minimum": 1, "maximum": 8}, "time_ms": {"type": "integer"}}}}},
+      "required": ["event", "id", "algo", "cues"]
+    },
+    "stems": {
+      "properties": {"event": {"const": "stems"}, "id": {"$ref": "#/$defs/id"}, "model": {"type": "string"}, "stems": {"type": "object", "additionalProperties": {"$ref": "#/$defs/blob"}}},
+      "required": ["event", "id", "model", "stems"]
+    },
+    "embedding": {
+      "properties": {"event": {"const": "embedding"}, "id": {"$ref": "#/$defs/id"}, "model": {"type": "string"}, "dims": {"type": "integer"}, "data": {"$ref": "#/$defs/blob"}},
+      "required": ["event", "id", "model", "dims", "data"]
+    },
+    "item_warning": {
+      "properties": {"event": {"const": "item_warning"}, "id": {"$ref": "#/$defs/id"}, "task": {"$ref": "#/$defs/task"}, "code": {"$ref": "#/$defs/code"}, "message": {"type": "string"}},
+      "required": ["event", "id", "task", "code", "message"]
+    },
+    "item_error": {
+      "properties": {"event": {"const": "item_error"}, "id": {"$ref": "#/$defs/id"}, "task": {"$ref": "#/$defs/task"}, "code": {"$ref": "#/$defs/code"}, "message": {"type": "string"}, "retryable": {"type": "boolean"}},
+      "required": ["event", "id", "task", "code", "message", "retryable"]
+    },
+    "item_done": {
+      "properties": {"event": {"const": "item_done"}, "id": {"$ref": "#/$defs/id"}, "tasks": {"type": "object", "additionalProperties": {"enum": ["ok", "failed", "skipped"]}}},
+      "required": ["event", "id", "tasks"]
+    }
+  }
+}

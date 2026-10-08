@@ -4,8 +4,42 @@
   "algo_version": "mix16",
   "runner": "runner.py",
   "summary": "The hot-cue picker: eight cues on phrase boundaries, ends-weighted (mix) or pure novelty (novelty), 8 or 16 bars.",
-  "inputs": ["--audio PATH", "--beats JSON", "--downbeats JSON"],
-  "flags": {"--algo": {"default": "mix16", "choices": ["mix8", "mix16", "novelty8", "novelty16"]}, "--ffmpeg": {"default": "ffmpeg"}},
+  "inputs": [
+    "--audio PATH or --features PATH",
+    "--beats JSON",
+    "--downbeats JSON"
+  ],
+  "flags": {
+    "--algo": {
+      "default": "mix16",
+      "choices": [
+        "mix8",
+        "mix16",
+        "novelty8",
+        "novelty16"
+      ]
+    },
+    "--ffmpeg": {
+      "default": "ffmpeg"
+    },
+    "--features": {
+      "default": "",
+      "note": "a DC7F file; with it no audio is read"
+    }
+  },
   "output": "cues",
-  "requires": {"python": ["librosa", "numpy"], "tools": ["ffmpeg"]}
+  "requires": {
+    "python": [
+      "librosa",
+      "numpy"
+    ],
+    "tools": [
+      "ffmpeg"
+    ]
+  },
+  "identity": {
+    "keys": [
+      "algo"
+    ]
+  }
 }

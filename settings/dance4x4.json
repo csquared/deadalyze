@@ -3,5 +3,15 @@
   "summary": "The default: four-on-the-floor dance music between 110 and 130 BPM.",
   "min_bpm": 110,
   "max_bpm": 130,
-  "beats_per_bar": 4
+  "beats_per_bar": 4,
+  "origin_refine": true,
+  "consensus": true,
+  "arbitrate": true,
+  "arbitrate_min_vote_agreement": 0.7,
+  "arbitrate_half_beat_slop_ms": 60,
+  "consensus_max_bpm_delta": 0.05,
+  "consensus_max_origin_ms": 60,
+  "consensus_max_phase_beats": 0.5,
+  "consensus_min_vote_agreement": 0.6,
+  "device": "auto"
 }

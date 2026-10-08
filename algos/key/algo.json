@@ -1,11 +1,34 @@
 {
   "name": "key",
   "kind": "key",
-  "algo_version": "madmom-key-cnn",
+  "algo_version": "madmom-key-cnn-2018",
   "runner": "runner.py",
-  "summary": "madmom's key CNN (Korzeniowski & Widmer): one of 24 labels with a softmax confidence; the host maps it to Camelot.",
-  "inputs": ["--audio PATH", "--items JSON"],
-  "flags": {"--ffmpeg": {"default": "ffmpeg"}},
+  "summary": "madmom's key CNN (Korzeniowski & Widmer 2018): one of 24 labels with a softmax confidence; the engine maps it to Camelot.",
+  "inputs": [
+    "--audio PATH",
+    "--items JSON"
+  ],
+  "flags": {
+    "--ffmpeg": {
+      "default": "ffmpeg"
+    },
+    "--device": {
+      "default": "cpu",
+      "setting": "device",
+      "identity": false
+    }
+  },
   "output": "key",
-  "requires": {"python": ["madmom", "numpy"], "tools": ["ffmpeg"]}
+  "requires": {
+    "python": [
+      "madmom",
+      "numpy"
+    ],
+    "tools": [
+      "ffmpeg"
+    ]
+  },
+  "identity": {
+    "keys": []
+  }
 }

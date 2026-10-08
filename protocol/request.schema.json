@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deadca7.com/protocol/1/request.schema.json",
+  "title": "engine analyze request",
+  "description": "The one JSON document a host writes to `engine analyze` on stdin: a settings document and the items to analyse. See docs/engine-protocol.md.",
+  "type": "object",
+  "required": ["protocol", "items"],
+  "properties": {
+    "protocol": {"const": 1},
+    "settings": {"$ref": "#/$defs/settings"},
+    "items": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/item"}}
+  },
+  "$defs": {
+    "settings": {
+      "description": "A bundle settings document (settings/README.md). Keys the engine does not know are kept and ignored; missing keys take the defaults from describe.settings_schema.",
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "summary": {"type": "string"},
+        "min_bpm": {"type": "number", "exclusiveMinimum": 0},
+        "max_bpm": {"type": "number", "exclusiveMinimum": 0},
+        "beats_per_bar": {"type": "integer", "minimum": 1, "maximum": 16},
+        "origin_refine": {"type": "boolean"},
+        "consensus": {"type": "boolean"},
+        "arbitrate": {"type": "boolean"},
+        "arbitrate_min_vote_agreement": {"type": "number", "minimum": 0, "maximum": 1},
+        "arbitrate_half_beat_slop_ms": {"type": "number", "minimum": 0},
+        "consensus_max_bpm_delta": {"type": "number", "minimum": 0},
+        "consensus_max_origin_ms": {"type": "number", "minimum": 0},
+        "consensus_max_phase_beats": {"type": "number", "minimum": 0},
+        "consensus_min_vote_agreement": {"type": "number", "minimum": 0, "maximum": 1},
+        "device": {"type": "string"}
+      }
+    },
+    "item": {
+      "type": "object",
+      "required": ["id", "audio", "tasks"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "audio": {"type": "string", "minLength": 1},
+        "tasks": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["grid", "key", "features", "waveform", "cues"]}},
+        "cue_algo": {"enum": ["mix8", "mix16", "novelty8", "novelty16"]},
+        "inputs": {
+          "type": "object",
+          "properties": {
+            "features": {
+              "description": "The track's stored DC7F features, for a cues task without audio.",
+              "type": "object",
+              "required": ["format", "data"],
+              "properties": {"format": {"const": "dc7f"}, "data": {"type": "object", "oneOf": [{"required": ["b64"]}, {"required": ["path"]}]}}
+            },
+            "grid": {
+              "description": "A grid the engine did not make in this request, in the grid event's shape (bpm, beats_per_bar, beats), for a cues task on its own.",
+              "type": "object",
+              "required": ["bpm", "beats_per_bar", "beats"],
+              "properties": {
+                "bpm": {"type": "number", "exclusiveMinimum": 0},
+                "beats_per_bar": {"type": "integer", "minimum": 1},
+                "beats": {"type": "array", "items": {"type": "array", "prefixItems": [{"type": "integer", "minimum": 1}, {"type": "integer", "minimum": 0}], "minItems": 2, "maxItems": 2}}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

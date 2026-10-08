@@ -4,8 +4,26 @@
   "algo_version": "dc7f-1",
   "runner": "runner.py",
   "summary": "DC7F recipe 1: fixed-clock band RMS and pooled MFCCs, independent of beats, so cues and phrases can be placed again without the runtime.",
-  "inputs": ["--audio PATH"],
-  "flags": {"--ffmpeg": {"default": "ffmpeg"}},
+  "inputs": [
+    "--audio PATH",
+    "--items JSON"
+  ],
+  "flags": {
+    "--ffmpeg": {
+      "default": "ffmpeg"
+    }
+  },
   "output": "features",
-  "requires": {"python": ["librosa", "numpy"], "tools": ["ffmpeg"]}
+  "requires": {
+    "python": [
+      "librosa",
+      "numpy"
+    ],
+    "tools": [
+      "ffmpeg"
+    ]
+  },
+  "identity": {
+    "keys": []
+  }
 }
