@@ -56,7 +56,7 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if git diff --quiet "$base" "$GITHUB_SHA" -- bundle algos settings; then
+          if git diff --quiet "$base" "$GITHUB_SHA" -- bundle algos settings engine protocol; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -84,6 +84,7 @@ jobs:
       ML_VERSION: ${{ needs.changes.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -149,4 +150,4 @@ jobs:
     needs: changes
     if: needs.changes.outputs.changed != 'true'
     steps:
-      - run: echo "bundle/, algos/ and settings/ have not changed since the previous ml-v* tag; skipping."
+      - run: echo "bundle/, algos/, settings/, engine/ and protocol/ have not changed since the previous ml-v* tag; skipping."

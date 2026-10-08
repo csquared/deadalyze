@@ -417,13 +417,28 @@ build_algos() {
   echo "ml: algos ok ($(ls "$STAGE/algos" | tr '\n' ' '))"
 }
 
+build_engine() {
+  echo "ml: building the engine"
+  require_tool cargo
+  local target_dir="$ROOT/engine/target"
+  (cd "$ROOT/engine" && cargo build --release --locked -p engine)
+  mkdir -p "$STAGE/bin"
+  cp "$target_dir/release/engine" "$STAGE/bin/engine"
+  chmod 755 "$STAGE/bin/engine"
+  # The engine answers describe from the stage: the legs, the checkpoint
+  # and the interpreter are all where it expects them.
+  (cd "$STAGE" && DEADCA7_BUNDLE="$STAGE" ./bin/engine describe > /dev/null)
+  echo "ml: engine ok ($(cd "$STAGE" && ./bin/engine version))"
+}
+
 write_manifest() {
   local created
   created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   mkdir -p "$STAGE"
-  # Layout 2 = layout 1 plus algos/ and settings/. Every layout-1 path keeps
-  # its name, so the layout-1 installers (DEADCA7 and deadcatalog) read this
-  # manifest unchanged. docs/bundle-format.md is the contract.
+  # Layout 3 = layout 2 (algos/ and settings/) plus the engine. Every
+  # layout-1 path keeps its name, so a layout-1 installer (deadcatalog, and
+  # DEADCA7 before its cutover) reads this manifest unchanged.
+  # docs/bundle-format.md is the contract.
   local algos
   algos="$(cd "$STAGE/algos" && ls -d */ | sed 's#/##' | awk 'BEGIN{ORS=""} NR>1{print ", "} {print "\"" $0 "\""}')"
   cat > "$STAGE/manifest.json" <<EOF
@@ -431,7 +446,7 @@ write_manifest() {
   "name": "deadca7-ml",
   "version": "$VERSION",
   "platform": "$GOOS/$GOARCH",
-  "layout": 2,
+  "layout": 3,
   "created_at": "$created",
   "python": "python/bin/python3",
   "lib": "lib",
@@ -439,6 +454,9 @@ write_manifest() {
   "algos": "algos",
   "algo_names": [$algos],
   "settings": "settings",
+  "engine": "bin/engine",
+  "protocols": [1],
+  "recipe": "$(cd "$STAGE" && ./bin/engine describe | python3 -c 'import json,sys; print(json.load(sys.stdin)["recipe"])')",
   "beatthis_script": "beatthis/grid.py",
   "beatthis_checkpoint": "beatthis/final0.ckpt",
   "embed_hfcache": "embed/hfcache",
@@ -492,6 +510,7 @@ build_embed
 bundle_ffmpeg
 build_stems
 build_algos
+build_engine
 write_manifest
 sign_macos_runtime
 archive_runtime
