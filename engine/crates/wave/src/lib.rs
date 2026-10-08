@@ -40,7 +40,12 @@ const MAX_FFMPEG_STDERR: usize = 4096;
 ///
 /// The columns are provisional: the stored detail wave is scaled against
 /// the whole track's peaks, which nothing knows until the last sample; a
-/// frame is scaled against a fixed level (6 dB of gain, clipped) instead.
+/// frame's column is the stored wave's column but for that scale — the
+/// same millisecond peaks through the same decaying follower, the high
+/// band through the same cosine — put on 0..127 with a band's full scale
+/// at 127. (It used to keep each column's raw peak with 6 dB of gain,
+/// clipped: a loud master's low band sat at 127 from the first bar, and
+/// the picture in flight was not the one that replaced it; 2026-10-08.)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame {
     pub offset: u32,
@@ -79,18 +84,18 @@ impl Rendered {
 }
 
 /// Renders a track from samples fed in order: every sample is kept for the
-/// record, and the five band filters run once as they arrive, feeding both
-/// the provisional frames and the per-millisecond band source.
+/// record, and the five band filters run once as they arrive, feeding the
+/// per-millisecond band source, from which both the provisional frames
+/// and the stored waves are drawn.
 #[derive(Clone, Debug)]
 pub struct Renderer {
     sample_rate: u32,
     samples: Vec<i16>,
     filters: filter::Bands,
     source: analyze::SourceBuilder,
-    // The provisional frame being drawn.
-    samples_per_column: usize,
-    column: [f64; 3],
-    in_column: usize,
+    // The provisional frame being drawn, and the follower's state per band.
+    produced: usize,
+    follow: [(f64, usize); 3],
     columns: Vec<u8>,
     emitted: usize,
 }
@@ -111,9 +116,8 @@ impl Renderer {
             samples: Vec::new(),
             filters: filter::Bands::new(sample_rate),
             source: analyze::SourceBuilder::new(sample_rate),
-            samples_per_column: (sample_rate as usize / FRAME_COLUMNS).max(1),
-            column: [0.0; 3],
-            in_column: 0,
+            produced: 0,
+            follow: [(0.0, 0); 3],
             columns: Vec::with_capacity(FRAME_COLUMNS * 3),
             emitted: 0,
         }
@@ -127,25 +131,43 @@ impl Renderer {
         for &sample in samples {
             let bands = self.filters.process(f64::from(sample) / 32768.0);
             self.source.push(bands);
-            self.column[0] = f64::max(self.column[0], bands[0]);
-            self.column[1] = f64::max(self.column[1], bands[1]);
-            self.column[2] = f64::max(self.column[2], bands[2]);
-            self.in_column += 1;
-            if self.in_column >= self.samples_per_column {
-                self.close_column(&mut frames);
+        }
+        // Every column whose centre millisecond is complete.
+        loop {
+            let (source, complete) = self.source.so_far();
+            if Self::center(self.produced) >= complete {
+                break;
             }
+            let column = Self::column(source, Self::center(self.produced), &mut self.follow);
+            self.take(column, &mut frames);
         }
         frames
     }
 
-    fn close_column(&mut self, frames: &mut Vec<Frame>) {
-        self.columns.extend_from_slice(&[
-            provisional_byte(self.column[0]),
-            provisional_byte(self.column[1]),
-            provisional_byte(self.column[2]),
-        ]);
-        self.column = [0.0; 3];
-        self.in_column = 0;
+    /// The millisecond a column is read at: the record's `(i + 1) * num_ms
+    /// / width`, which is `(i + 1) * 1000 / rate` for any track long enough
+    /// to matter.
+    fn center(column: usize) -> usize {
+        (column + 1) * 1000 / FRAME_COLUMNS
+    }
+
+    /// One column as `scroll` draws it, on the provisional scale.
+    fn column(source: &[analyze::BandColumn], center: usize, follow: &mut [(f64, usize); 3]) -> [u8; 3] {
+        let center = center.min(source.len().saturating_sub(1));
+        follow[0] = analyze::peak_follow(source, center, follow[0].1, follow[0].0, 300, 0.99, 0);
+        follow[1] = analyze::peak_follow(source, center, follow[1].1, follow[1].0, 200, 0.98, 1);
+        follow[2] = analyze::peak_follow(source, center, follow[2].1, follow[2].0, 100, 0.97, 2);
+        let shaped = 64.0 - 64.0 * (follow[2].0 * std::f64::consts::PI / 32768.0).cos();
+        [
+            provisional_byte(follow[0].0 / 32768.0),
+            provisional_byte(follow[1].0 / 32768.0),
+            provisional_byte(shaped / 128.0),
+        ]
+    }
+
+    fn take(&mut self, column: [u8; 3], frames: &mut Vec<Frame>) {
+        self.columns.extend_from_slice(&column);
+        self.produced += 1;
         if self.columns.len() / 3 >= FRAME_COLUMNS {
             self.emit(frames);
         }
@@ -161,31 +183,40 @@ impl Renderer {
         self.emitted += columns;
     }
 
-    /// Finish: flush the last partial frame (a short last column included)
-    /// and build the seven waves. The frames handed out over the whole track
-    /// add up to exactly the detail width.
-    pub fn finish(mut self) -> (Vec<Frame>, Rendered) {
-        let mut frames = Vec::new();
-        if self.in_column > 0 {
-            self.close_column(&mut frames);
-        }
-        if !self.columns.is_empty() {
-            self.emit(&mut frames);
-        }
-        let source = if self.sample_rate >= 1000 {
-            self.source.finish()
+    /// Finish: draw the columns to the detail width over the finished
+    /// source, flush the last partial frame and build the seven waves. The
+    /// frames handed out over the whole track add up to exactly the detail
+    /// width.
+    pub fn finish(self) -> (Vec<Frame>, Rendered) {
+        let Renderer { sample_rate, samples, source: builder, mut produced, mut follow, mut columns, mut emitted, .. } = self;
+        let source = if sample_rate >= 1000 {
+            builder.finish()
         } else {
-            analyze::band_source(&self.samples, self.sample_rate)
+            analyze::band_source(&samples, sample_rate)
         };
-        let rendered = render(&self.samples, self.sample_rate, &source);
+        let mut frames = Vec::new();
+        let width = detail_width(samples.len(), sample_rate);
+        while produced < width {
+            columns.extend_from_slice(&Self::column(&source, Self::center(produced), &mut follow));
+            produced += 1;
+            if columns.len() / 3 >= FRAME_COLUMNS {
+                let n = columns.len() / 3;
+                frames.push(Frame { offset: emitted as u32, columns: n as u32, data: std::mem::take(&mut columns) });
+                emitted += n;
+            }
+        }
+        if !columns.is_empty() {
+            let n = columns.len() / 3;
+            frames.push(Frame { offset: emitted as u32, columns: n as u32, data: columns });
+        }
+        let rendered = render(&samples, sample_rate, &source);
         (frames, rendered)
     }
 }
 
-/// Puts a band peak (0..1 of full scale) on the stored wave's 0..127 with
-/// 6 dB of gain.
+/// A band peak (0..1 of full scale) on 0..127.
 fn provisional_byte(peak: f64) -> u8 {
-    analyze::clamp_byte((f64::min(1.0, peak * 2.0) * 127.0).round())
+    analyze::clamp_byte((f64::min(1.0, peak) * 127.0).round())
 }
 
 /// The Go's `AnalyzeSamples`, given the band source already reduced.

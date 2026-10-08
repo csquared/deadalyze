@@ -131,6 +131,13 @@ impl SourceBuilder {
         column.high = f64::max(column.high, bands[2] * 32768.0);
     }
 
+    /// The columns so far, the last of them still filling, and how many
+    /// are complete: a sample past bucket `i` closes bucket `i`.
+    pub(crate) fn so_far(&self) -> (&[BandColumn], usize) {
+        let complete = (self.count * 1000 / self.sample_rate) as usize;
+        (&self.source, complete.min(self.source.len()))
+    }
+
     /// The source: `samples*1000/rate` columns (at least one), each capped at
     /// 32767; the samples past the last whole millisecond are not counted,
     /// as in the Go.
@@ -534,7 +541,7 @@ pub(crate) fn scroll(source: &[BandColumn], width: usize, scales: [u16; 3]) -> V
 }
 
 #[allow(clippy::too_many_arguments)]
-fn peak_follow(
+pub(crate) fn peak_follow(
     source: &[BandColumn],
     center: usize,
     mut pos: usize,
