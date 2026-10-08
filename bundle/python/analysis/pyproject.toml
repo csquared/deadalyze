@@ -1,0 +1,18 @@
+[project]
+name = "deadca7-analysis"
+version = "0.1.0"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "beatnet",
+  "librosa>=0.10",
+  "madmom @ git+https://github.com/CPJKU/madmom.git",
+  "numpy>=1.26,<2",
+  "pillow>=10",
+  "tensorflow>=2.15,<2.17",
+]
+
+[tool.uv.sources]
+beatnet = { git = "https://github.com/mjhydri/BeatNet.git" }
+
+[tool.uv.workspace]
+members = ["beatthis", "embed"]

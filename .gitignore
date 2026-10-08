@@ -1,0 +1,10 @@
+.DS_Store
+bundle/dist/
+bundle/build.noindex/
+__pycache__/
+*.pyc
+.venv/
+# corpora are data, published from their own repositories
+corpus/data/
+build/
+.recall/

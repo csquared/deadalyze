@@ -1,0 +1,7 @@
+{
+  "name": "dance4x4",
+  "summary": "The default: four-on-the-floor dance music between 110 and 130 BPM.",
+  "min_bpm": 110,
+  "max_bpm": 130,
+  "beats_per_bar": 4
+}

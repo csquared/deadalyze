@@ -1,0 +1,25 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # deadcatalog is a sibling checkout locally (go.mod replaces it with
+      # ../deadcatalog); in CI it is checked out inside the workspace instead.
+      - uses: actions/checkout@v4
+        with:
+          repository: csquared/deadcatalog
+          path: deadcatalog
+          token: ${{ secrets.DEADCATALOG_TOKEN || github.token }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go mod edit -replace github.com/csquared/deadcatalog=./deadcatalog
+      - run: go vet ./... && go test ./...
+      - run: bash -n bundle/build.sh

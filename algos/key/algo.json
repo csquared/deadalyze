@@ -1,0 +1,11 @@
+{
+  "name": "key",
+  "kind": "key",
+  "algo_version": "madmom-key-cnn",
+  "runner": "runner.py",
+  "summary": "madmom's key CNN (Korzeniowski & Widmer): one of 24 labels with a softmax confidence; the host maps it to Camelot.",
+  "inputs": ["--audio PATH", "--items JSON"],
+  "flags": {"--ffmpeg": {"default": "ffmpeg"}},
+  "output": "key",
+  "requires": {"python": ["madmom", "numpy"], "tools": ["ffmpeg"]}
+}

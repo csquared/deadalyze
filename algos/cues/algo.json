@@ -1,0 +1,11 @@
+{
+  "name": "cues",
+  "kind": "cues",
+  "algo_version": "mix16",
+  "runner": "runner.py",
+  "summary": "The hot-cue picker: eight cues on phrase boundaries, ends-weighted (mix) or pure novelty (novelty), 8 or 16 bars.",
+  "inputs": ["--audio PATH", "--beats JSON", "--downbeats JSON"],
+  "flags": {"--algo": {"default": "mix16", "choices": ["mix8", "mix16", "novelty8", "novelty16"]}, "--ffmpeg": {"default": "ffmpeg"}},
+  "output": "cues",
+  "requires": {"python": ["librosa", "numpy"], "tools": ["ffmpeg"]}
+}

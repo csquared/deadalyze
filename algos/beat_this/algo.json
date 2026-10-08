@@ -1,0 +1,18 @@
+{
+  "name": "beat_this",
+  "kind": "grid",
+  "algo_version": "beat-this-v1",
+  "runner": "runner.py",
+  "summary": "Beat This! (ISMIR 2024) fitted to a constant-tempo lattice: the cross-check leg, whose raw downbeats vote on bar phase.",
+  "inputs": ["--audio PATH", "--items JSON"],
+  "flags": {
+    "--beats-per-bar": {"default": 4, "setting": "beats_per_bar"},
+    "--model": {"default": "final0", "note": "a name the library knows, or a path to a bundled checkpoint (beatthis/final0.ckpt)"},
+    "--device": {"default": "cpu"},
+    "--no-refine": {"default": false},
+    "--origin-frame-snap": {"default": 0},
+    "--ffmpeg": {"default": "ffmpeg"}
+  },
+  "output": "grid",
+  "requires": {"python": ["beat_this", "soundfile", "numpy", "torch"], "tools": ["ffmpeg"], "checkpoints": ["beatthis/final0.ckpt"]}
+}

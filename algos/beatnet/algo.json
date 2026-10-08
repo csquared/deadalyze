@@ -1,0 +1,20 @@
+{
+  "name": "beatnet",
+  "kind": "grid",
+  "algo_version": "beatnet-dbn-v14",
+  "runner": "runner.py",
+  "summary": "BeatNet (CRNN + madmom DBN) fitted to a constant-tempo lattice: the primary leg of the deadca7 engine.",
+  "inputs": ["--audio PATH", "--items JSON"],
+  "flags": {
+    "--min-bpm": {"default": 70, "setting": "min_bpm"},
+    "--max-bpm": {"default": 150, "setting": "max_bpm"},
+    "--beats-per-bar": {"default": 4, "setting": "beats_per_bar"},
+    "--model": {"default": 1},
+    "--device": {"default": "cpu"},
+    "--no-refine": {"default": false},
+    "--origin-frame-snap": {"default": 0},
+    "--ffmpeg": {"default": "ffmpeg"}
+  },
+  "output": "grid",
+  "requires": {"python": ["BeatNet", "madmom", "librosa", "numpy", "tensorflow", "torch"], "tools": ["ffmpeg"]}
+}
