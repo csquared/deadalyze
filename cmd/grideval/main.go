@@ -67,7 +67,11 @@ func run() error {
 		truth     = flag.String("truth", "rekordbox", "corpus: the provider whose grids are the references")
 		provider  = flag.String("provider", "deadca7", "corpus: the provider whose stored grids are scored")
 		fresh     = flag.Bool("fresh", false, "corpus: analyse the audio again with the current engine instead of scoring stored grids")
-		audioDir  = flag.String("audio", "", "corpus -fresh: find each track's audio by file name under this directory")
+		audioDir  = flag.String("audio", "", "corpus -fresh: find each track's audio by file name under these directories (comma-separated)")
+		dryRun    = flag.Bool("dry-run", false, "corpus -fresh: list what would run (tracks, audio found, hours of audio, time at -rate) and stop")
+		rate      = flag.Float64("rate", 5.3, "corpus -fresh -dry-run: seconds a track the estimate assumes")
+		track     = flag.String("track", "", "corpus: one track, by file name (or the file name of a path)")
+		detail    = flag.Bool("detail", false, "corpus -fresh: print each grid against its reference beat by beat (the low-level diff)")
 		audio     = flag.String("corpus", "", "folder mode: directory the references' paths are relative to")
 		refsPath  = flag.String("refs", "", "folder mode: references JSON")
 		update    = flag.Bool("update", false, "folder mode: write the current grids as the references instead of scoring them")
@@ -87,7 +91,14 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		scores, err = scoreCorpus(ctx, *corpusDir, *truth, *provider, *fresh, *audioDir, *source, names, options{NoArbitrate: *noArb}, *limit)
+		if *track != "" {
+			names = map[string]bool{filepath.Base(*track): true}
+		}
+		sel := selection{dir: *corpusDir, truth: *truth, provider: *provider, fresh: *fresh, audioDirs: splitList(*audioDir), source: *source, only: names, limit: *limit, dryRun: *dryRun, rate: *rate, detail: *detail}
+		scores, err = scoreCorpus(ctx, sel, options{NoArbitrate: *noArb})
+		if err == nil && *dryRun {
+			return nil
+		}
 	case *audio != "" || *refsPath != "":
 		return folderMode(ctx, *audio, *refsPath, *update, *jsonOut)
 	default:
@@ -100,20 +111,54 @@ func run() error {
 	return report(scores, *jsonOut)
 }
 
+// selection is which of a corpus's tracks a run covers and how.
+type selection struct {
+	dir, truth, provider string
+	fresh                bool
+	audioDirs            []string
+	source               string
+	only                 map[string]bool
+	limit                int
+	dryRun               bool
+	rate                 float64
+	detail               bool
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // scoreCorpus scores one provider's grids against another's, track by track.
-func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, audioDir, source string, only map[string]bool, opts options, limit int) ([]Score, error) {
+func scoreCorpus(ctx context.Context, sel selection, opts options) ([]Score, error) {
+	dir, truth, provider, fresh, source, only, limit := sel.dir, sel.truth, sel.provider, sel.fresh, sel.source, sel.only, sel.limit
 	idx, err := corpus.Load(dir)
 	if err != nil {
 		return nil, err
 	}
-	var byName map[string]string
-	if fresh && audioDir != "" {
-		if byName, err = audioByName(audioDir); err != nil {
-			return nil, err
+	byName := map[string]string{}
+	if fresh {
+		for _, d := range sel.audioDirs {
+			found, err := audioByName(d)
+			if err != nil {
+				return nil, err
+			}
+			for k, v := range found {
+				if _, dup := byName[k]; !dup {
+					byName[k] = v
+				}
+			}
 		}
 	}
 	var scores []Score
 	skipped := 0
+	var audioSeconds int64
+	var missing []string
 	// A fresh run is one batch: the models load once for every track rather
 	// than once a track, which was most of the twenty seconds a file. The
 	// references are gathered first, then the batch runs, then each result
@@ -146,13 +191,21 @@ func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, a
 		}
 		if fresh {
 			path := audioPath(ctx, db, e, byName)
-			db.Close()
 			if path == "" {
+				db.Close()
 				skipped++
+				missing = append(missing, e.FileName)
 				continue
 			}
+			if sel.detail {
+				if tuples, _, err := corpus.Beats(ctx, db, truth); err == nil {
+					ref.beats = tuples
+				}
+			}
+			db.Close()
 			paths = append(paths, path)
 			refs[path] = ref
+			audioSeconds += e.DurationS
 			continue
 		}
 		started := time.Now()
@@ -170,8 +223,27 @@ func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, a
 		scores = append(scores, s)
 		fmt.Println(s.line())
 	}
+	if fresh && sel.dryRun {
+		fmt.Printf("dry run: %d track(s) would run, %d skipped (no %s reference or no audio)\n", len(paths), skipped, truth)
+		fmt.Printf("  audio: %.1f hours; at %.1f s a track about %.0f minutes\n", float64(audioSeconds)/3600, sel.rate, float64(len(paths))*sel.rate/60)
+		if len(sel.audioDirs) > 0 {
+			fmt.Printf("  audio found by name under %s\n", strings.Join(sel.audioDirs, ", "))
+		}
+		if len(missing) > 0 {
+			n := min(len(missing), 10)
+			fmt.Printf("  no audio for %d, e.g.: %s\n", len(missing), strings.Join(missing[:n], "; "))
+		}
+		for i, p := range paths {
+			if i == 20 {
+				fmt.Printf("  … %d more\n", len(paths)-20)
+				break
+			}
+			fmt.Printf("  %s\n", p)
+		}
+		return nil, nil
+	}
 	if fresh && len(paths) > 0 {
-		scores = append(scores, scoreFresh(ctx, paths, refs, opts)...)
+		scores = append(scores, scoreFresh(ctx, paths, refs, opts, sel.detail)...)
 	}
 	if skipped > 0 {
 		fmt.Printf("grideval: %d track(s) skipped (no %s reference, no %s grid, or no audio)\n", skipped, truth, provider)
@@ -183,7 +255,7 @@ func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, a
 // each grid as it lands. Only the grid task is asked for: scoring reads
 // nothing else. A track the engine fails is a scored error, never the end
 // of the run.
-func scoreFresh(ctx context.Context, paths []string, refs map[string]Reference, opts options) []Score {
+func scoreFresh(ctx context.Context, paths []string, refs map[string]Reference, opts options, detail bool) []Score {
 	var scores []Score
 	started := time.Now()
 	last := started
@@ -210,12 +282,24 @@ func scoreFresh(ctx context.Context, paths []string, refs map[string]Reference, 
 		fmt.Printf("[%d/%d] %s\n", done, len(paths), s.line())
 	}
 	seen := map[string]bool{}
+	var ranOn string
 	err = eng.AnalyzeAll(ctx, client.Request{Settings: opts.settings(), Items: items}, 0, func(ev client.Event) {
 		ref := refs[ev.ID]
 		switch ev.Event {
+		case client.BatchStarted:
+			if ranOn == "" && ev.Engine != nil {
+				var st struct {
+					Device string `json:"device"`
+				}
+				_ = json.Unmarshal(ev.Settings, &st)
+				ranOn = fmt.Sprintf("%s %s, recipe %s, device %s, bundle %s", ev.Engine.Impl, ev.Engine.Version, ev.Recipe, st.Device, ev.RuntimeVersion)
+			}
 		case client.GridEvent:
 			seen[ev.ID] = true
 			add(ev.ID, score(ref, fromGrid(ev)))
+			if detail {
+				fmt.Print(diff(ref, ev))
+			}
 		case client.ItemError:
 			if ev.Task == client.TaskGrid && !seen[ev.ID] {
 				seen[ev.ID] = true
@@ -227,9 +311,53 @@ func scoreFresh(ctx context.Context, paths []string, refs map[string]Reference, 
 		fmt.Fprintln(os.Stderr, "grideval:", err)
 	}
 	if n := len(scores); n > 0 {
-		fmt.Printf("grideval: %d track(s) in %.0fs, %.1fs a track\n", n, time.Since(started).Seconds(), time.Since(started).Seconds()/float64(n))
+		fmt.Printf("grideval: %d track(s) in %.0fs, %.1fs a track (%s)\n", n, time.Since(started).Seconds(), time.Since(started).Seconds()/float64(n), ranOn)
 	}
 	return scores
+}
+
+// diff is the low-level view of one grid against its reference: the two
+// tempos, the two bar 1s, the first beats of each side by side, and what
+// the engine did to get there.
+func diff(ref Reference, ev client.Event) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "      %-28s %-14s %-14s\n", ref.Path, "engine", ref.Note+" ref")
+	fmt.Fprintf(&b, "      %-28s %-14.3f %-14.3f\n", "bpm", ev.BPM, ref.BPM)
+	first := int64(0)
+	if ev.FirstDownbeatMs != nil {
+		first = *ev.FirstDownbeatMs
+	}
+	fmt.Fprintf(&b, "      %-28s %-14d %-14d  Δ %+d ms\n", "first downbeat (ms)", first, ref.FirstDownbeatMs, first-int64(ref.FirstDownbeatMs))
+	if ev.Timeline != nil {
+		fmt.Fprintf(&b, "      %-28s %+.3f ms applied as %+d (%s)\n", "timeline", ev.Timeline.OffsetMs, ev.Timeline.AppliedShiftMs, ev.Timeline.Name)
+	}
+	if c := ev.Consensus; c != nil {
+		line := c.Verdict
+		if c.BeatThis != nil {
+			line += fmt.Sprintf("; vote %+d at %.2f", c.BeatThis.PhaseVote, c.BeatThis.PhaseAgreement)
+		}
+		if c.ShiftMs != nil {
+			line += fmt.Sprintf("; shifted %+d ms", *c.ShiftMs)
+		}
+		if c.RelabelBeats != nil {
+			line += fmt.Sprintf("; relabelled %+d beats", *c.RelabelBeats)
+		}
+		if c.Dispute != "" {
+			line += "; " + c.Dispute
+		}
+		fmt.Fprintf(&b, "      %-28s %s\n", "consensus", line)
+	}
+	if ev.Identity != nil {
+		fmt.Fprintf(&b, "      %-28s %s (%s)\n", "identity", ev.Identity.IdentityHash[:12], ev.Identity.Recipe)
+	}
+	n := min(8, len(ev.Beats), len(ref.beats))
+	if n > 0 {
+		fmt.Fprintf(&b, "      %-28s %-14s %-14s\n", "beat", "engine n@ms", "ref n@ms")
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&b, "      %-28d %d@%-12d %d@%-12d  Δ %+d\n", i+1, ev.Beats[i][0], ev.Beats[i][1], ref.beats[i][0], ref.beats[i][2], ev.Beats[i][1]-ref.beats[i][2])
+		}
+	}
+	return b.String()
 }
 
 // reference is the truth provider's grid for a track, as a Reference. The

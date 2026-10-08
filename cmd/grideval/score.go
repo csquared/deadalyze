@@ -90,6 +90,9 @@ type Reference struct {
 	FirstDownbeatMs int     `json:"first_downbeat_ms"`
 	BeatsPerBar     int     `json:"beats_per_bar"`
 	Note            string  `json:"note,omitempty"`
+	// beats are the reference's own beats when a run wants the low-level
+	// diff; never written.
+	beats []corpus.BeatTuple
 }
 
 // Score is one file's grid against its reference.
