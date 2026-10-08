@@ -35,9 +35,11 @@ beside this one, and fails when any drifts.
 
 ## Cutting over
 
-1. Tag `ml-v0.2.0` here; the workflow publishes the second bundle.
+1. Tag `ml-v*` here; the workflow publishes the bundle. Done: `ml-v0.2.1`
+   (2026-10-08) is the first; `ml-v0.2.0` built but its archives were over
+   GitHub's 2 GiB asset cap, see `bundle/README.md`.
 2. On deadca7.com set `DEADCA7_RELEASE_REPO=csquared/deadalyze`. Hosts see
-   `ml-v0.2.0` as the latest and install it; layout 1 keys are unchanged.
+   `ml-v0.2.1` as the latest and install it; layout 1 keys are unchanged.
 3. deadcatalog and DEADCA7 point their runner copies at `algos/` (a `go:embed`
    of a vendored copy, a generated Swift file), with the pin test as the gate.
 4. deadca7-old's `ml/` and `.github/workflows/ml-release.yml` are deleted.

@@ -56,7 +56,8 @@ type legacyCues struct {
 }
 
 // ImportLegacy brings a DEADCA7 library's own grids into the corpus as
-// provider "deadca7", version "legacy". A track whose file name matches one
+// provider "deadca7", version "legacy", and the grids its person set by
+// hand as provider "manual". A track whose file name matches one
 // already in the corpus (rekordbox's grid of the same file, typically) is
 // merged into it; the rest become new entries named by the audio file's
 // sha256 the grid recorded.
@@ -212,8 +213,17 @@ func legacyCatalog(t map[string]any, grid legacyGrid, cues legacyCues, match Ent
 	}
 	tables = append(tables, catalog.Table{Name: "catalog_tracks", Rows: []map[string]any{obs}})
 
+	// A grid the person set by hand (DEADCA7 kept those under manual/,
+	// whatever engine first proposed them) is theirs, not the engine's: it
+	// goes in as provider "manual" so it can be the truth a run is scored
+	// against, with the app's own source word (manual, arbitrated) as the
+	// version. The engine's grids stay deadca7/legacy.
+	provider, version := "deadca7", "legacy"
+	if strings.HasPrefix(str(t["beats_path"]), "manual/") {
+		provider, version = "manual", firstNonEmpty(str(t["beats_src"]), "manual")
+	}
 	analysis := map[string]any{
-		"id": 1, "uuid": catalog.NewUUID(), "track_uuid": trackUUID, "provider": "deadca7", "version": "legacy",
+		"id": 1, "uuid": catalog.NewUUID(), "track_uuid": trackUUID, "provider": provider, "version": version,
 		"date": firstNonEmpty(str(t["created_at"]), now), "selected": 1,
 	}
 	if match.FileName != "" {

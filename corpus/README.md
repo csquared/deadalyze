@@ -28,7 +28,7 @@ A `.cdb` is SQLite in deadcatalog's schema (`deadcatalog/catalog/schema`), so
 | `artists`, `albums` | the names the track points at                                  |
 | `catalogs`       | one row of kind `corpus` per source the grids came from (`Library`, `STICK`, `deadca7-legacy`) |
 | `catalog_tracks` | the source's observation: file name, size, `file_sha256`, rekordbox ids in `external_ids` |
-| `analyses`       | one row per grid: `provider` (`rekordbox`, `deadca7`, a contributor's name), `version` |
+| `analyses`       | one row per grid: `provider` (`rekordbox`, `deadca7`, `manual` for a grid a person set by hand, a contributor's name), `version` |
 | `beats`          | `beats_json`: `[[beat_number, tempo_x100, time_ms], …]`           |
 | `cues`, `phrases`, `vbr_info` | as the source had them                               |
 | `analysis_files` | the ones that carry data: `grid` (the runner's JSON: `algo_version`, `cfg_hash`, config, anchor), `key`, `features` |
