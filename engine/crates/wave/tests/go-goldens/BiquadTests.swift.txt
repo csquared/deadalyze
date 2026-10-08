@@ -1,0 +1,55 @@
+import CryptoKit
+import Foundation
+import XCTest
+@testable import Engine
+
+/// The band filters, held to Go's bits. Their outputs are quantized to bytes
+/// before any waveform golden sees them, so a filter that rounds a product Go
+/// fused (or fuses one Go rounded) still passes every waveform golden. Here
+/// each filter's coefficients, and every output over 20000 samples of noise,
+/// are compared bit for bit. The data was written by a Go probe running
+/// deadcatalog's biquad at every frequency the waveforms use, at 44.1 and
+/// 48 kHz. Go's fusion follows the inlining: every vendored call site rounds
+/// b1*x1 and fuses the rest, while a verbatim copy inlined into the probe
+/// rounded b0*x. So the probe spelled the rounding out, and its disassembly
+/// was checked instruction for instruction against the vendored sites'.
+final class BiquadTests: XCTestCase {
+    static let golden: [(high: Bool, freq: Double, sampleRate: Int, coefficients: [UInt64], outputs: String)] = [
+        (false, 200, 44100, [0x3f2a145f5d15390d, 0x3f3a145f5d15390d, 0x3f2a145f5d15390d, 0xbfff5af5c33faa5d, 0x3feebc709e569a09], "b331f8bb9f3571e2271e3e33b5be690eb8c78b89ed9a626f9e2f9b2cafe120bd"),
+        (false, 300, 44100, [0x3f3d0ce32283199d, 0x3f4d0ce32283199d, 0x3f3d0ce32283199d, 0xbfff087ac50df11a, 0x3fee1f7bfbad23c2], "bf7e1da6ba8e5c27a4e8f1d1e3dd9e3e3009e1e52279399bd4ca207dca2ca75b"),
+        (false, 1200, 44100, [0x3f7aa73a653fc85f, 0x3f8aa73a653fc85f, 0x3f7aa73a653fc85f, 0xbffc25abb26f0e5d, 0x3fe9209138081afe], "e139f50dba87f490fafdccc2988857b5b2e82028a0fdd69b60f962f900eed840"),
+        (false, 9000, 44100, [0x3fcb4a5f990f4532, 0x3fdb4a5f990f4532, 0x3fcb4a5f990f4532, 0xbfd5b4a72beebfb8, 0x3fc892ccbc1a9436], "ff77efe5c7f1e9b131e93e3111fb4b0ada620de53dd00896fb1408a51b839d7a"),
+        (true, 250, 44100, [0x3fef343fc96e70bd, 0xbfff343fc96e70bd, 0x3fef343fc96e70bd, 0xbfff31b7062288aa, 0x3fee6d911974b19d], "4563e61a4c9652a1a923d8acf7ba4fb8937b2fffe18073e52df1bf1e020cc2f1"),
+        (true, 3000, 44100, [0x3fe7a21bee766716, 0xbff7a21bee766716, 0x3fe7a21bee766716, 0xbff6852452d0f8ed, 0x3fe17e271437aa7f], "e3c6230768c94a7fa7434b910ca43102baeb7077db6c893c0d1cb2e16500471c"),
+        (true, 4000, 44100, [0x3fe5551d7ea6e36c, 0xbff5551d7ea6e36c, 0x3fe5551d7ea6e36c, 0xbff380879e7cdd19, 0x3fdca6cd7b43a6f9], "54ebbdf991e3e8ea9efcd05dc9c924b9ac7699eec55d93f9bbd12a4cce359c33"),
+        (false, 200, 48000, [0x3f260ca6a753e72e, 0x3f360ca6a753e72e, 0x3f260ca6a753e72e, 0xbfff685dcf6a059d, 0x3feed63ec87de034], "0689daafab3a79c0991d6e7c459fc1a0c93ba7e66f5d1beca25445770dc56afe"),
+        (false, 300, 48000, [0x3f38949fbc581160, 0x3f48949fbc581160, 0x3f38949fbc581160, 0xbfff1c949abe98f8, 0x3fee4573855b5df9], "34f6c6dd2cd1aece9a676e89c6196bbb68378d23d52dd9c0f015d67636809bd4"),
+        (false, 1200, 48000, [0x3f76b3f5d262d842, 0x3f86b3f5d262d842, 0x3f76b3f5d262d842, 0xbffc75469856207b, 0x3fe9a02cdf3f57b8], "4d83e0846ec06e0f9fa22f3a0bbccaf4b036dd267e5b7b982eaeeaeb1c1ddda4"),
+        (false, 9000, 48000, [0x3fc7e599938aac09, 0x3fd7e599938aac09, 0x3fc7e599938aac09, 0xbfdda0c6cfacca35, 0x3fcad7f3ed844491], "1297631ccb55fb3a79d7a0c9a00acc9d3ebddae6368f46ab028ecb5eda9e24c8"),
+        (true, 250, 48000, [0x3fef449cf6a6091a, 0xbfff449cf6a6091a, 0x3fef449cf6a6091a, 0xbfff42783ced73db, 0x3fee8d8360bd3caf], "7d9e794636a75fc1cf1a327a4c04d1e99a80d6c1df3a24c0aa55e98063edf173"),
+        (true, 3000, 48000, [0x3fe839f83c1443a4, 0xbff839f83c1443a4, 0x3fe839f83c1443a4, 0xbff74494ec35e49b, 0x3fe25eb717e54558], "915fc9f119e62a3de13609b7964e7afa0f223e2a5cc53a8180dd6aa29731953a"),
+        (true, 4000, 48000, [0x3fe60ecbcf7935d1, 0xbff60ecbcf7935d1, 0x3fe60ecbcf7935d1, 0xbff4795fd98444a9, 0x3fde90df15b89be4], "9d50393992d639d89c0a21b8c90ca3ded764c3130fae0a27345e838e1806964a"),
+    ]
+
+    /// The probe's noise: a 64-bit LCG's top 16 bits as a sample.
+    static func noise() -> [Double] {
+        var state: UInt64 = 0x9e37_79b9_7f4a_7c15
+        return (0..<20000).map { _ in
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Double(Int16(truncatingIfNeeded: state >> 48)) / 32768
+        }
+    }
+
+    func testEveryFilterIsGos() {
+        let input = Self.noise()
+        for g in Self.golden {
+            let name = "\(g.high ? "highpass" : "lowpass")(\(g.freq), \(g.sampleRate))"
+            let f = g.high ? Biquad.highpass(g.freq, g.sampleRate) : Biquad.lowpass(g.freq, g.sampleRate)
+            XCTAssertEqual([f.b0, f.b1, f.b2, f.a1, f.a2].map(\.bitPattern), g.coefficients, name)
+            var bits = Data(capacity: input.count * 8)
+            for x in input { withUnsafeBytes(of: f.process(x).bitPattern.littleEndian) { bits.append(contentsOf: $0) } }
+            let hash = SHA256.hash(data: bits).map { String(format: "%02x", $0) }.joined()
+            XCTAssertEqual(hash, g.outputs, name)
+        }
+    }
+}
