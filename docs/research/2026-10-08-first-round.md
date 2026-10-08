@@ -128,18 +128,37 @@ score (`-only build/sayless1-failures.json`):
   ours calls the beat at the top of the track "1" (first downbeat at 0 ms
   on half of them) where rekordbox's "1" is the beat after it. A track
   that opens on a pickup, and a rule that cannot see one.
-- **The vote knows some of it.** The cross-checker voted 0 (agreeing with
-  our origin) on 40 of 90; on the other 50 its vote, applied regardless of
-  agreement, would fix 42. At its current 0.9 threshold it fixes 1; at 0.8,
-  20; at 0.6, 38. What a lower threshold breaks among the 1115 passes is
-  the number that decides it, and it is being measured on a 150-track
-  sample of them.
-- **BeatNet's own downbeat labels are thrown away.** The runner keeps the
+- **The vote knows a third of it, and the threshold is too high.** The
+  cross-checker voted 0 (agreeing with our origin) on 40 of 90; on the
+  other 50 its vote, applied regardless of agreement, would fix 42. The
+  relabel applies it at ≥ 0.9 agreement, which catches 1. On a random 150
+  of the 1115 passes (rerun with the vote recorded), 139 vote 0 and the
+  11 that do not sit at 0.39–0.64 or ≥ 0.93:
+
+  | relabel at agreement ≥ | fixes of the 90 | breaks of 150 passes | breaks, scaled to 1115 | net   |
+  |------------------------|-----------------|----------------------|------------------------|-------|
+  | 0.9 (today)            | 1               | 0                    | 0                      | +1    |
+  | 0.8                    | 20              | 0                    | 0                      | +20   |
+  | **0.7**                | **30**          | **0**                | **0**                  | **+30** |
+  | 0.6                    | 38              | 2                    | ~15                    | +23   |
+  | 0.5                    | 39              | 4                    | ~30                    | +9    |
+
+  `arbitrateMinVoteAgreement` 0.9 → 0.7 in deadcatalog's
+  `analysis/consensus.go` is the round-one accuracy change: about +30
+  tracks on SAYLESS1 (1115 → ~1145 of 1276, 87 % → 90 %) for no measured
+  loss. The 0.9 was calibrated on a 100-track run where the vote disagreed
+  once; 1276 tracks say the band 0.7–0.9 is where it is right and unused.
+  The sample puts the break rate under 2 % at 95 % confidence, so the
+  worst case at 0.7 is still positive; the full set with the vote
+  recorded (a three-hour run) settles it exactly.
+- **BeatNet's own downbeat labels are no help.** The runner keeps the
   DBN's beat/downbeat labels only to rank candidates for the tempo fit;
-  the lattice's "1" is the top of the track by rule. On a pickup the DBN's
-  label of the first beats is exactly the missing signal. A research copy
-  of the runner that keeps the raw labels is being run over the 90 and the
-  150 to see how often the DBN's "1" is rekordbox's.
+  the lattice's "1" is the top of the track by rule. A research copy of
+  the runner that keeps the raw labels, run over the 90 failures and the
+  150 passes: the DBN's majority downbeat is rekordbox's on 38 of the 90
+  but on only 92 of the 150 passes (61 %), against 139 of 150 for Beat
+  This's vote. Taking the first bars only does no better. The signal is
+  Beat This's, and the rule stands.
 
 Two runs of the same engine on the same 191 tracks did not agree
 everywhere: 9 tracks moved by a fraction of a beat (a 0.3–0.7 beat origin
@@ -162,3 +181,22 @@ fails both legs: ffmpeg rejects its malformed LIST chunk (`too short LIST
 tag`) while libsndfile reads it fine. The runners decode with the bundle's
 ffmpeg only; a `soundfile` fallback in `decode()` would cover it, at the
 cost of a runner hash change in every host.
+
+## Next round
+
+1. deadcatalog: `arbitrateMinVoteAgreement` 0.9 → 0.7 (+30 on SAYLESS1),
+   and Beat This on `mps` where it is available (same grids, the pass in
+   two thirds of the time at a sixteenth of the CPU). Both are host
+   changes; neither touches a runner hash.
+2. Pin down the origin's run-to-run drift before tuning anything that
+   reads it: run the 191 twice more with nothing else on the machine and
+   diff the fractions.
+3. The 26 fractional and 19 half-beat origin failures: the offsets cluster
+   at 120–210, 240–320 and 335–420 ms, which is not an encoder delay. Pull
+   their onset stacks and see what the refiner is locking to.
+4. A `soundfile` fallback in the runners' `decode()` for what ffmpeg
+   refuses (one WAV here); a runner change, so all three hosts move.
+5. The harness streams nothing until the second leg finishes a batch:
+   arbitrate as each track's second leg lands (deadcatalog), and a
+   `-store` that writes a fresh run's grids back into the corpus as a
+   provider so a run is scored once and compared forever.
