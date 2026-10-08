@@ -152,7 +152,11 @@ impl Renderer {
     }
 
     /// One column as `scroll` draws it, on the provisional scale.
-    fn column(source: &[analyze::BandColumn], center: usize, follow: &mut [(f64, usize); 3]) -> [u8; 3] {
+    fn column(
+        source: &[analyze::BandColumn],
+        center: usize,
+        follow: &mut [(f64, usize); 3],
+    ) -> [u8; 3] {
         let center = center.min(source.len().saturating_sub(1));
         follow[0] = analyze::peak_follow(source, center, follow[0].1, follow[0].0, 300, 0.99, 0);
         follow[1] = analyze::peak_follow(source, center, follow[1].1, follow[1].0, 200, 0.98, 1);
@@ -188,7 +192,16 @@ impl Renderer {
     /// frames handed out over the whole track add up to exactly the detail
     /// width.
     pub fn finish(self) -> (Vec<Frame>, Rendered) {
-        let Renderer { sample_rate, samples, source: builder, mut produced, mut follow, mut columns, mut emitted, .. } = self;
+        let Renderer {
+            sample_rate,
+            samples,
+            source: builder,
+            mut produced,
+            mut follow,
+            mut columns,
+            mut emitted,
+            ..
+        } = self;
         let source = if sample_rate >= 1000 {
             builder.finish()
         } else {
@@ -201,13 +214,21 @@ impl Renderer {
             produced += 1;
             if columns.len() / 3 >= FRAME_COLUMNS {
                 let n = columns.len() / 3;
-                frames.push(Frame { offset: emitted as u32, columns: n as u32, data: std::mem::take(&mut columns) });
+                frames.push(Frame {
+                    offset: emitted as u32,
+                    columns: n as u32,
+                    data: std::mem::take(&mut columns),
+                });
                 emitted += n;
             }
         }
         if !columns.is_empty() {
             let n = columns.len() / 3;
-            frames.push(Frame { offset: emitted as u32, columns: n as u32, data: columns });
+            frames.push(Frame {
+                offset: emitted as u32,
+                columns: n as u32,
+                data: columns,
+            });
         }
         let rendered = render(&samples, sample_rate, &source);
         (frames, rendered)

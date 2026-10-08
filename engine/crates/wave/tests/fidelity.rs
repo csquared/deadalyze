@@ -30,7 +30,11 @@ fn bins(data: &[u8], bins: usize) -> [Vec<f64>; 3] {
     for (i, c) in data.chunks_exact(3).enumerate() {
         let bin = i * bins / columns.max(1);
         for b in 0..3 {
-            let v = if maxes[b] > 0 { f64::from(c[b]) / f64::from(maxes[b]) } else { 0.0 };
+            let v = if maxes[b] > 0 {
+                f64::from(c[b]) / f64::from(maxes[b])
+            } else {
+                0.0
+            };
             out[b][bin] = out[b][bin].max(v);
         }
     }
@@ -48,12 +52,24 @@ fn frames_are_the_detail_wave_near_enough() {
     let (tail, rendered) = renderer.finish();
     frames.extend(tail);
     let flight: Vec<u8> = frames.iter().flat_map(|f| f.data.iter().copied()).collect();
-    let detail = rendered.waves.iter().find(|w| w.kind == "three_band_detail").unwrap();
-    assert_eq!(flight.len(), detail.data.len(), "the frames add up to the detail's width");
+    let detail = rendered
+        .waves
+        .iter()
+        .find(|w| w.kind == "three_band_detail")
+        .unwrap();
+    assert_eq!(
+        flight.len(),
+        detail.data.len(),
+        "the frames add up to the detail's width"
+    );
     let a = bins(&flight, 112);
     let b = bins(&detail.data, 112);
     for band in 0..3 {
-        let diffs: Vec<f64> = a[band].iter().zip(&b[band]).map(|(x, y)| (x - y).abs()).collect();
+        let diffs: Vec<f64> = a[band]
+            .iter()
+            .zip(&b[band])
+            .map(|(x, y)| (x - y).abs())
+            .collect();
         let mean = diffs.iter().sum::<f64>() / diffs.len() as f64;
         let worst = diffs.iter().cloned().fold(0.0, f64::max);
         eprintln!("band {band}: mean {mean:.3} worst {worst:.3}");
@@ -69,7 +85,8 @@ fn frames_are_the_detail_wave_near_enough() {
 #[ignore]
 fn regen_synthetic_frames() {
     let path = format!("{FIXTURES}/synthetic.json");
-    let mut gold: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let mut gold: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let samples = wav_samples(Path::new(&format!("{FIXTURES}/synthetic.wav")));
     let mut renderer = wave::Renderer::new(44100);
     let mut frames = Vec::new();
