@@ -293,8 +293,10 @@ mod tests {
 
     #[test]
     fn arbitration_off_only_flags() {
-        let mut s = Settings::default();
-        s.arbitrate = false;
+        let s = Settings {
+            arbitrate: false,
+            ..Settings::default()
+        };
         let mut ours = grid(120.0, 0, 64);
         let theirs = grid(120.0, 250, 64);
         let out = arbitrate(&mut ours, &theirs, 0.0, &s);
