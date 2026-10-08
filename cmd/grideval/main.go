@@ -91,12 +91,12 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		if *track != "" {
-			names = map[string]bool{filepath.Base(*track): true}
-		}
-		sel := selection{dir: *corpusDir, truth: *truth, provider: *provider, fresh: *fresh, audioDirs: splitList(*audioDir), source: *source, only: names, limit: *limit, dryRun: *dryRun, rate: *rate, detail: *detail}
+		sel := selection{dir: *corpusDir, truth: *truth, provider: *provider, fresh: *fresh, audioDirs: splitList(*audioDir), source: *source, only: names, limit: *limit, dryRun: *dryRun, rate: *rate, detail: *detail, track: *track}
 		scores, err = scoreCorpus(ctx, sel, options{NoArbitrate: *noArb})
-		if err == nil && *dryRun {
+		if err != nil {
+			return err
+		}
+		if *dryRun {
 			return nil
 		}
 	case *audio != "" || *refsPath != "":
@@ -122,6 +122,26 @@ type selection struct {
 	dryRun               bool
 	rate                 float64
 	detail               bool
+	// track narrows the run to one track, by a file name (a stick's
+	// export truncates names, so the shorter of the two must be a prefix
+	// of the longer, extension aside, case aside).
+	track string
+}
+
+// wantsTrack says whether an entry is the one -track names.
+func (s selection) wantsTrack(e corpus.Entry) bool {
+	if s.track == "" {
+		return true
+	}
+	norm := func(name string) string {
+		name = strings.ToLower(strings.TrimSuffix(filepath.Base(name), filepath.Ext(name)))
+		return strings.TrimSpace(name)
+	}
+	want, have := norm(s.track), norm(e.FileName)
+	if want == "" || have == "" {
+		return false
+	}
+	return strings.HasPrefix(want, have) || strings.HasPrefix(have, want)
 }
 
 func splitList(s string) []string {
@@ -173,6 +193,9 @@ func scoreCorpus(ctx context.Context, sel selection, opts options) ([]Score, err
 			continue
 		}
 		if only != nil && !only[e.FileName] {
+			continue
+		}
+		if !sel.wantsTrack(e) {
 			continue
 		}
 		db, err := corpus.Open(filepath.Join(dir, e.File))
@@ -393,8 +416,19 @@ func audioPath(ctx context.Context, db *sql.DB, e corpus.Entry, byName map[strin
 func audioByName(dir string) (map[string]string, error) {
 	out := map[string]string{}
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
+		if err != nil {
+			// A directory that cannot be read (a volume's .Spotlight-V100,
+			// .fseventsd) is not the end of the search.
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			if name := d.Name(); strings.HasPrefix(name, ".") && path != dir {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if isAudio(path) {
 			out[filepath.Base(path)] = path
