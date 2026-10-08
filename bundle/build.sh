@@ -197,7 +197,7 @@ build_analysis() {
   python="$(runtime_python)"
   copy_tree "$ROOT/bundle/python/beatthis" "$STAGE/beatthis"
 
-  PYTHONPATH="$STAGE/analysis/lib:$STAGE/lib" PYTHONNOUSERSITE=1 "$python" -c 'import sys, types; sys.modules.setdefault("pyaudio", types.SimpleNamespace(paFloat32=0, PyAudio=lambda: None)); from BeatNet.BeatNet import BeatNet; import librosa, madmom, numpy, soundfile, tensorflow, torch; import beat_this; print("analysis runtime ok")'
+  PYTHONPATH="$STAGE/analysis/lib:$STAGE/lib" PYTHONNOUSERSITE=1 "$python" -c 'import sys, types; sys.modules.setdefault("pyaudio", types.SimpleNamespace(paFloat32=0, PyAudio=lambda: None)); from BeatNet.BeatNet import BeatNet; import librosa, madmom, numpy, soundfile, torch; import beat_this; print("analysis runtime ok")'
 
   local checkpoint="$STAGE/beatthis/final0.ckpt"
   if [[ ! -f "$checkpoint" ]]; then
@@ -275,12 +275,24 @@ print("bundled", dst, os.path.getsize(dst), "bytes")
 PY
   fi
 
-  # Seed the HF cache with the text tower's roberta weights, then prove the
-  # whole thing answers OFFLINE -- an installed app never touches the network.
+  # Seed the HF cache with roberta-base's config and tokenizer, then prove
+  # the whole thing answers OFFLINE -- an installed app never touches the
+  # network. The weights themselves are not kept: embed.py builds the text
+  # tower from the config and the CLAP checkpoint fills it, so the 476 MB
+  # model file only ever served the download step.
   local hfcache="$STAGE/embed/hfcache"
   mkdir -p "$hfcache"
   HF_HOME="$hfcache" PYTHONPATH="$STAGE/analysis/lib:$STAGE/lib" PYTHONNOUSERSITE=1 \
     EMBED_CHECKPOINT="$ckpt" "$python" "$STAGE/embed/embed.py" --texts '["smoke"]' > /dev/null
+  find "$hfcache" \( -name 'model.safetensors' -o -name 'pytorch_model.bin' -o -name '*.h5' -o -name '*.msgpack' \) -print0 \
+    | while IFS= read -r -d '' f; do
+        local blob
+        blob="$(readlink "$f" || true)"
+        if [[ -n "$blob" ]]; then
+          rm -f "$(dirname "$f")/$blob"
+        fi
+        rm -f "$f"
+      done
   HF_HOME="$hfcache" HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
     PYTHONPATH="$STAGE/analysis/lib:$STAGE/lib" PYTHONNOUSERSITE=1 \
     EMBED_CHECKPOINT="$ckpt" "$python" "$STAGE/embed/embed.py" --texts '["offline smoke"]' > /dev/null

@@ -16,6 +16,13 @@ with `DEADCATALOG_RUNTIME` to test before a release. `uv` must be on PATH;
 the first build downloads the interpreter, the wheels and the checkpoints
 into `bundle/build.noindex/cache` and takes a while.
 
+GitHub caps a release asset at 2 GiB, so the archive has to stay under it:
+ml-v0.2.0 did not (2.2 GB and 2.8 GB) and its release failed. Nothing the
+runners import is optional, so the weight comes off elsewhere: TensorFlow is
+gone (nothing imported it), and roberta-base's weights are not shipped
+(`embed.py` builds the text tower from its config and the CLAP checkpoint
+fills it).
+
 `python/analysis` is a uv workspace (`beatthis`, `embed` members) whose lock
 pins every analysis dependency; `python/stems` is the stem separator's. Add a
 dependency there and re-lock (`uv lock --project bundle/python/analysis`); the

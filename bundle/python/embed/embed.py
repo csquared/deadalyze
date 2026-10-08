@@ -36,6 +36,14 @@ def find_checkpoint(models_dir):
 
 def load_model(models_dir):
     import laion_clap
+    from transformers import RobertaConfig, RobertaModel
+
+    # laion_clap builds its text tower with RobertaModel.from_pretrained,
+    # which wants roberta-base's 476 MB of weights on disk, and then
+    # overwrites every one of them from the CLAP checkpoint (load_ckpt is a
+    # strict load_state_dict). Building the tower from the config alone gives
+    # the same model and the bundle keeps the config and tokenizer only.
+    RobertaModel.from_pretrained = classmethod(lambda cls, name, *a, **k: cls(RobertaConfig.from_pretrained(name)))
 
     model = laion_clap.CLAP_Module(enable_fusion=False, amodel="HTSAT-base")
     model.load_ckpt(find_checkpoint(models_dir))
@@ -43,9 +51,12 @@ def load_model(models_dir):
     return model
 
 
-def quantize(audio):
-    # int16 round-trip for parity with CLAP's training data pipeline.
-    clipped = np.clip(audio, -1.0, 1.0)
+def quantize(audio, clip_samples):
+    # int16 round-trip for parity with CLAP's training data pipeline. The
+    # window is cut to the model's clip length first: librosa's resampled
+    # 10 s comes back a sample long (480001 of 480000), and CLAP meets a long
+    # input with a random crop, which made the vector depend on the RNG.
+    clipped = np.clip(audio[:clip_samples], -1.0, 1.0)
     return (clipped * 32767.0).astype(np.int16).astype(np.float32) / 32767.0
 
 
@@ -58,12 +69,13 @@ def embed_audio(model, path):
     slack = max(0.0, duration - WINDOW_SEC)
     offsets = sorted({round(f * slack, 3) for f in WINDOW_FRACTIONS}) if slack > 0 else [0.0]
 
+    clip_samples = int(model.model_cfg["audio_cfg"]["clip_samples"])
     vecs = []
     for off in offsets:
         audio, _ = librosa.load(path, sr=SAMPLE_RATE, mono=True, offset=off, duration=WINDOW_SEC)
         if audio.size == 0:
             continue
-        window = quantize(audio).reshape(1, -1)
+        window = quantize(audio, clip_samples).reshape(1, -1)
         vec = model.get_audio_embedding_from_data(x=window, use_tensor=False)[0]
         vecs.append(np.asarray(vec, dtype=np.float64))
     if not vecs:

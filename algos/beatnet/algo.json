@@ -16,5 +16,5 @@
     "--ffmpeg": {"default": "ffmpeg"}
   },
   "output": "grid",
-  "requires": {"python": ["BeatNet", "madmom", "librosa", "numpy", "tensorflow", "torch"], "tools": ["ffmpeg"]}
+  "requires": {"python": ["BeatNet", "madmom", "librosa", "numpy", "torch"], "tools": ["ffmpeg"]}
 }
