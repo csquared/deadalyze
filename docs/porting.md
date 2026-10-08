@@ -27,9 +27,11 @@ is the map, and the record of the cutover to the engine protocol.
 
 ## What stays where
 
-- deadcatalog keeps `analysis/runtime` (resolving and installing a bundle),
-  the catalog schema and the CLI. Its `analysis/engine` becomes a client of
-  the bundle's engine through `client/` here (the `engine-client` branch).
+- deadcatalog keeps everything it has: `analysis/runtime`, its Go engine
+  and its runner copies, the catalog schema and the CLI. It is not cut
+  over; it may stay in Go (its maintainer's call). The layout-1 keys of
+  every bundle from here keep working for it, and `client/` is there if it
+  ever wants the engine.
 - DEADCA7 keeps `Engine/Runtime/RuntimeInstaller.swift`, its catalog write
   and its native cue picker; its pipeline becomes `EngineClient.swift`.
 - deadca7.com (deadca7-old `www/internal/handler/install.go`) keeps serving
@@ -49,9 +51,8 @@ is the map, and the record of the cutover to the engine protocol.
 4. DEADCA7 cuts over: one `engine analyze` per chunk, `analyses.version`
    "2", the sha256 pins replaced by a `describe` check. deadca7.com sets
    `DEADCA7_RELEASE_REPO=csquared/deadalyze` so the app installs from here.
-5. deadcatalog cuts over by PR (`engine-client`): `analysis/engine` a client,
-   the Go recipe and runner copies deleted, `dc analyze` one batch per run.
-6. deadca7-old's `ml/` and `.github/workflows/ml-release.yml` are deleted.
+5. deadca7-old's `ml/` and `.github/workflows/ml-release.yml` are deleted.
 
-`algos/algos_test.go` pins the legs' hashes; the sibling checks skip until
-the hosts have cut over, after which they become a protocol check.
+deadcatalog is not in the cutover. `algos/algos_test.go` pins the legs'
+hashes; its check of deadcatalog's copies skips, since those are the
+previous legs and stay so.
