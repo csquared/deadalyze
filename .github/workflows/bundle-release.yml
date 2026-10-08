@@ -84,7 +84,7 @@ jobs:
       ML_VERSION: ${{ needs.changes.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.88
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
