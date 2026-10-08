@@ -12,12 +12,13 @@ demand and points every runner at it. deadalyze builds and publishes it.
 | archive          | `deadca7-ml-<goos>-<goarch>.tar.gz`              |
 | platforms        | `darwin/arm64`, `linux/amd64`                    |
 | release tag      | `ml-vX.Y.Z` (a GitHub release on this repo)      |
-| release manifest | `downloads/ml/<tag>/manifest.json` on deadca7.com, `latest` allowed |
+| release manifest | `manifest.json`, an asset of the release: `https://github.com/csquared/deadalyze/releases/download/<tag>/manifest.json`, or `releases/latest/download/manifest.json` |
 
 The names are the ones DEADCA7 (`Engine/Runtime/RuntimeInstaller.swift`) and
-deadcatalog (`analysis/runtime`) already resolve. They do not change with the
-move; what changes is which repository the release lives in, and deadca7.com
-follows that with its `DEADCA7_RELEASE_REPO` setting.
+deadcatalog (`analysis/runtime`) resolve. A host fetches the manifest from
+the GitHub release itself (DEADCA7 does, from its cutover on); deadca7.com
+may mirror it at `downloads/ml/<tag>/manifest.json` for a host that is
+pointed there (`DEADCATALOG_RUNTIME_URL`), and is not required.
 
 ## The release manifest
 
@@ -36,8 +37,8 @@ What a host fetches first. One version, one asset per platform:
 }
 ```
 
-`go run ./cmd/bundle manifest` writes it from the build's `checksums.txt`.
-deadca7.com writes the same shape on the fly from the GitHub release.
+`go run ./cmd/bundle manifest` writes it from the build's `checksums.txt`,
+and the release workflow publishes it beside the archives.
 
 ## The archive
 
