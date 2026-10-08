@@ -9,6 +9,7 @@
 //	go run ./cmd/grideval -corpus-dir ~/grids                       # deadca7's stored grids vs rekordbox's
 //	go run ./cmd/grideval -corpus-dir ~/grids -provider contributor # another provider's stored grids
 //	go run ./cmd/grideval -corpus-dir ~/grids -json out.json        # keep the per-track scores
+//	go run ./cmd/grideval -corpus-dir ~/grids -track "01 - Alive.mp3" -detail   # one stored grid against rekordbox's, beat by beat
 //
 // Fresh, with the bundle's engine (DEADCA7_BUNDLE, or the installed runtime;
 // DEADCA7_ENGINE and DEADCA7_ALGOS point at a built engine and a checkout of
@@ -71,7 +72,7 @@ func run() error {
 		dryRun    = flag.Bool("dry-run", false, "corpus -fresh: list what would run (tracks, audio found, hours of audio, time at -rate) and stop")
 		rate      = flag.Float64("rate", 5.3, "corpus -fresh -dry-run: seconds a track the estimate assumes")
 		track     = flag.String("track", "", "corpus: one track, by file name (or the file name of a path)")
-		detail    = flag.Bool("detail", false, "corpus -fresh: print each grid against its reference beat by beat (the low-level diff)")
+		detail    = flag.Bool("detail", false, "corpus: print each grid against its reference beat by beat (the low-level diff; with -track, one track's)")
 		audio     = flag.String("corpus", "", "folder mode: directory the references' paths are relative to")
 		refsPath  = flag.String("refs", "", "folder mode: references JSON")
 		update    = flag.Bool("update", false, "folder mode: write the current grids as the references instead of scoring them")
@@ -233,16 +234,26 @@ func scoreCorpus(ctx context.Context, sel selection, opts options) ([]Score, err
 		}
 		started := time.Now()
 		tuples, g, err := corpus.Beats(ctx, db, provider)
-		db.Close()
 		if err != nil {
+			db.Close()
 			return nil, err
 		}
+		if sel.detail {
+			if rb, _, err := corpus.Beats(ctx, db, truth); err == nil {
+				ref.beats = rb
+			}
+		}
+		db.Close()
 		if len(tuples) == 0 {
 			skipped++
 			continue
 		}
-		s := score(ref, resultFromBeats(tuples, g))
+		r := resultFromBeats(tuples, g)
+		s := score(ref, r)
 		s.Duration = time.Since(started).Seconds()
+		if sel.detail {
+			fmt.Print(diff(ref, r, provider, nil))
+		}
 		scores = append(scores, s)
 		fmt.Println(s.line())
 	}
@@ -319,9 +330,10 @@ func scoreFresh(ctx context.Context, paths []string, refs map[string]Reference, 
 			}
 		case client.GridEvent:
 			seen[ev.ID] = true
-			add(ev.ID, score(ref, fromGrid(ev)))
+			r := fromGrid(ev)
+			add(ev.ID, score(ref, r))
 			if detail {
-				fmt.Print(diff(ref, ev))
+				fmt.Print(diff(ref, r, "engine", gridNotes(ev)))
 			}
 		case client.ItemError:
 			if ev.Task == client.TaskGrid && !seen[ev.ID] {
@@ -342,17 +354,36 @@ func scoreFresh(ctx context.Context, paths []string, refs map[string]Reference, 
 // diff is the low-level view of one grid against its reference: the two
 // tempos, the two bar 1s, the first beats of each side by side, and what
 // the engine did to get there.
-func diff(ref Reference, ev client.Event) string {
+// diff prints one grid against its reference: bpm, bar 1, the first eight
+// beats side by side. label names the grid's side ("engine", a provider);
+// notes are lines the caller knows (timeline, consensus, identity).
+func diff(ref Reference, r *Result, label string, notes [][2]string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "      %-28s %-14s %-14s\n", ref.Path, "engine", ref.Note+" ref")
-	fmt.Fprintf(&b, "      %-28s %-14.3f %-14.3f\n", "bpm", ev.BPM, ref.BPM)
-	first := int64(0)
-	if ev.FirstDownbeatMs != nil {
-		first = *ev.FirstDownbeatMs
+	fmt.Fprintf(&b, "      %-28s %-14s %-14s\n", ref.Path, label, ref.Note+" ref")
+	fmt.Fprintf(&b, "      %-28s %-14.3f %-14.3f\n", "bpm", r.BPM, ref.BPM)
+	first := 0
+	if r.FirstDownbeatMs != nil {
+		first = *r.FirstDownbeatMs
 	}
-	fmt.Fprintf(&b, "      %-28s %-14d %-14d  Δ %+d ms\n", "first downbeat (ms)", first, ref.FirstDownbeatMs, first-int64(ref.FirstDownbeatMs))
+	fmt.Fprintf(&b, "      %-28s %-14d %-14d  Δ %+d ms\n", "first downbeat (ms)", first, ref.FirstDownbeatMs, first-ref.FirstDownbeatMs)
+	for _, n := range notes {
+		fmt.Fprintf(&b, "      %-28s %s\n", n[0], n[1])
+	}
+	n := min(8, len(r.Beats), len(ref.beats))
+	if n > 0 {
+		fmt.Fprintf(&b, "      %-28s %-14s %-14s\n", "beat", label+" n@ms", "ref n@ms")
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&b, "      %-28d %d@%-12d %d@%-12d  Δ %+d\n", i+1, r.Beats[i].BeatNumber, r.Beats[i].TimeMs, ref.beats[i][0], ref.beats[i][2], int64(r.Beats[i].TimeMs)-ref.beats[i][2])
+		}
+	}
+	return b.String()
+}
+
+// gridNotes are the lines of a fresh grid's event that a stored grid lacks.
+func gridNotes(ev client.Event) [][2]string {
+	var notes [][2]string
 	if ev.Timeline != nil {
-		fmt.Fprintf(&b, "      %-28s %+.3f ms applied as %+d (%s)\n", "timeline", ev.Timeline.OffsetMs, ev.Timeline.AppliedShiftMs, ev.Timeline.Name)
+		notes = append(notes, [2]string{"timeline", fmt.Sprintf("%+.3f ms applied as %+d (%s)", ev.Timeline.OffsetMs, ev.Timeline.AppliedShiftMs, ev.Timeline.Name)})
 	}
 	if c := ev.Consensus; c != nil {
 		line := c.Verdict
@@ -368,19 +399,12 @@ func diff(ref Reference, ev client.Event) string {
 		if c.Dispute != "" {
 			line += "; " + c.Dispute
 		}
-		fmt.Fprintf(&b, "      %-28s %s\n", "consensus", line)
+		notes = append(notes, [2]string{"consensus", line})
 	}
 	if ev.Identity != nil {
-		fmt.Fprintf(&b, "      %-28s %s (%s)\n", "identity", ev.Identity.IdentityHash[:12], ev.Identity.Recipe)
+		notes = append(notes, [2]string{"identity", fmt.Sprintf("%s (%s)", ev.Identity.IdentityHash[:12], ev.Identity.Recipe)})
 	}
-	n := min(8, len(ev.Beats), len(ref.beats))
-	if n > 0 {
-		fmt.Fprintf(&b, "      %-28s %-14s %-14s\n", "beat", "engine n@ms", "ref n@ms")
-		for i := 0; i < n; i++ {
-			fmt.Fprintf(&b, "      %-28d %d@%-12d %d@%-12d  Δ %+d\n", i+1, ev.Beats[i][0], ev.Beats[i][1], ref.beats[i][0], ref.beats[i][2], ev.Beats[i][1]-ref.beats[i][2])
-		}
-	}
-	return b.String()
+	return notes
 }
 
 // reference is the truth provider's grid for a track, as a Reference. The
