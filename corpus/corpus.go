@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -616,14 +617,17 @@ func Grids(ctx context.Context, db *sql.DB) ([]Grid, error) {
 }
 
 // fromBeats reads bpm, first downbeat and meter off the beat tuples
-// [beat_number, tempo_x100, time_ms].
+// [beat_number, tempo_x100, time_ms]. A grid need not list a beat at its
+// bar 1: rekordbox's often opens on beat 2 or 3 of a bar whose downbeat is
+// before the first listed beat. The first downbeat is that bar's, laid back
+// from the first listed beat by its number, so a lattice that agrees beat
+// for beat scores as agreeing; it can be negative.
 func fromBeats(g *Grid, tuples []catalog.BeatTuple) {
 	g.Beats = len(tuples)
 	if len(tuples) == 0 {
 		return
 	}
 	g.BPM = float64(tuples[0][1]) / 100
-	first := false
 	for _, t := range tuples {
 		if t[1] != tuples[0][1] {
 			g.Dynamic = true
@@ -631,11 +635,14 @@ func fromBeats(g *Grid, tuples []catalog.BeatTuple) {
 		if int(t[0]) > g.BeatsPerBar {
 			g.BeatsPerBar = int(t[0])
 		}
-		if !first && t[0] == 1 {
-			g.FirstDownbeatMs = int(t[2])
-			first = true
-		}
 	}
+	first := tuples[0]
+	if first[0] <= 1 || g.BPM <= 0 {
+		g.FirstDownbeatMs = int(first[2])
+		return
+	}
+	period := 60000 / g.BPM
+	g.FirstDownbeatMs = int(math.Round(float64(first[2]) - float64(first[0]-1)*period))
 }
 
 // Beats reads one analysis's beat tuples from an open track catalog.

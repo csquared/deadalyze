@@ -219,6 +219,18 @@ func TestBuildKeepsPathsAndWaveformsOnRequest(t *testing.T) {
 	_ = os.Remove
 }
 
+func TestFirstDownbeatLaidBack(t *testing.T) {
+	// rekordbox lists beats 2, 3, 4, 1 from 483 ms at 124 BPM: bar 1 is at 0.
+	var g Grid
+	fromBeats(&g, []catalog.BeatTuple{{2, 12400, 483}, {3, 12400, 967}, {4, 12400, 1451}, {1, 12400, 1935}})
+	require.Equal(t, 124.0, g.BPM)
+	require.Equal(t, 4, g.BeatsPerBar)
+	require.InDelta(t, 0, g.FirstDownbeatMs, 1)
+	// A grid that opens on beat 3 after a lead-in: bar 1 lands before zero.
+	fromBeats(&g, []catalog.BeatTuple{{3, 12000, 200}, {4, 12000, 700}, {1, 12000, 1200}})
+	require.Equal(t, -800, g.FirstDownbeatMs)
+}
+
 func TestLegacyTuples(t *testing.T) {
 	g := legacyGrid{BPM: 125, Beats: []float64{0.0457, 0.5257, 1.0057, 1.4857, 1.9657, 2.4457}, Downbeats: []float64{0.0457, 1.9657}}
 	got := legacyTuples(g)
