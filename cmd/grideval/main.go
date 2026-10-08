@@ -210,7 +210,7 @@ func scoreFresh(ctx context.Context, paths []string, refs map[string]Reference, 
 		fmt.Printf("[%d/%d] %s\n", done, len(paths), s.line())
 	}
 	seen := map[string]bool{}
-	err = eng.Analyze(ctx, client.Request{Settings: opts.settings(), Items: items}, func(ev client.Event) {
+	err = eng.AnalyzeAll(ctx, client.Request{Settings: opts.settings(), Items: items}, 0, func(ev client.Event) {
 		ref := refs[ev.ID]
 		switch ev.Event {
 		case client.GridEvent:
@@ -408,7 +408,7 @@ func folderMode(ctx context.Context, dir, refsPath string, update bool, jsonOut 
 	started := time.Now()
 	last := started
 	var failed error
-	err = eng.Analyze(ctx, client.Request{Settings: map[string]any{"name": "dance4x4"}, Items: items}, func(ev client.Event) {
+	err = eng.AnalyzeAll(ctx, client.Request{Settings: map[string]any{"name": "dance4x4"}, Items: items}, 0, func(ev client.Event) {
 		i, ok := index[ev.ID]
 		if !ok {
 			return

@@ -259,3 +259,31 @@ func tail(s string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// AnalyzeAll runs a request of any size as batches the engine accepts,
+// one after another, delivering every event to on. size is the batch
+// size; 0 asks the engine (describe.limits.max_batch_items). Events keep
+// their per-batch seq; a caller that needs one sequence counts for
+// itself. The first batch that fails ends the run with its error after
+// its events have been delivered.
+func (e *Engine) AnalyzeAll(ctx context.Context, req Request, size int, on func(Event)) error {
+	if size <= 0 {
+		d, err := e.Describe(ctx)
+		if err != nil {
+			return err
+		}
+		size = d.Limits.MaxBatchItems
+		if size <= 0 {
+			size = 16
+		}
+	}
+	for start := 0; start < len(req.Items); start += size {
+		end := min(start+size, len(req.Items))
+		batch := req
+		batch.Items = req.Items[start:end]
+		if err := e.Analyze(ctx, batch, on); err != nil {
+			return err
+		}
+	}
+	return nil
+}

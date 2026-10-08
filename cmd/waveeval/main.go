@@ -1,19 +1,21 @@
 // Command waveeval is the waveform regression harness: it analyses each track
-// of a rekordbox USB export fresh with the current engine, writes its ANLZ the
-// way a stick export does, and scores every waveform section (PWAV, PWV2-7,
-// PWVC) against the one rekordbox wrote for the same audio, field by field:
-// exact %, mean absolute error and correlation. A section whose mean error
-// rises above its floor fails the run.
+// of a rekordbox USB export fresh with the bundle's engine, lays its waveforms
+// out as the sections a stick export would carry, and scores every waveform
+// section (PWAV, PWV2-7, PWVC) against the one rekordbox wrote for the same
+// audio, field by field: exact %, mean absolute error and correlation. A
+// section whose mean error rises above its floor fails the run.
 //
 //	go run ./cmd/waveeval -export ~/rb-usb          # a rekordbox export: PIONEER/USBANLZ plus the audio it names; floors in fixtures/waveeval/floors.json
 //	go run ./cmd/waveeval -update                   # write the current errors (plus a margin) as the floors
 //	go run ./cmd/waveeval -fields                   # every field, not just each section's mean
 //
-// It needs the analysis runtime (its ffmpeg), so it is not part of go test.
+// It needs the bundle and its engine (DEADCA7_BUNDLE, DEADCA7_ENGINE, see
+// client.Resolve), so it is not part of go test.
 package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -23,9 +25,8 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/errors"
-	"github.com/csquared/deadcatalog/analysis/waveform"
-	"github.com/csquared/deadcatalog/anlz"
-	"github.com/csquared/deadcatalog/anlz/export"
+	"github.com/csquared/deadalyze/anlz"
+	"github.com/csquared/deadalyze/client"
 )
 
 // floorMargin is the slack a floor written by -update leaves over what was
@@ -78,10 +79,14 @@ func run() error {
 	if len(tracks) == 0 {
 		return errors.Errorf("no analysed tracks with audio under %s", *exportRoot)
 	}
+	eng, err := client.Resolve()
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
 	var failures []string
 	for _, tr := range tracks {
-		got, err := engineSections(ctx, tr.audio)
+		got, err := engineSections(ctx, eng, tr.audio)
 		if err != nil {
 			return errors.Errorf("%s: %w", tr.content, err)
 		}
@@ -163,7 +168,7 @@ func rekordboxTracks(exportRoot string) ([]rekordboxTrack, error) {
 }
 
 // readSections reads an analysis folder's waveform entries by FourCC (PWVC as
-// its three scales) and the content path it was made for.
+// its three scales, big-endian) and the content path it was made for.
 func readSections(dir string) (map[string][]byte, string, error) {
 	out := map[string][]byte{}
 	var content string
@@ -182,54 +187,15 @@ func readSections(dir string) (map[string][]byte, string, error) {
 		for _, w := range f.Waveforms() {
 			out[w.FourCC] = w.Data
 		}
-		if t := f.Tag("PWVC"); t != nil {
-			if p := t.Payload(); len(p) >= 6 {
-				out["PWVC"] = p[len(p)-6:]
+		if scales, ok := f.BandScales(); ok {
+			b := make([]byte, 6)
+			for i, v := range scales {
+				binary.BigEndian.PutUint16(b[i*2:], v)
 			}
+			out["PWVC"] = b
 		}
 	}
 	return out, content, nil
-}
-
-// engineSections analyses audio with the engine and writes its ANLZ as the
-// stick export would, returning the sections by FourCC.
-func engineSections(ctx context.Context, audio string) (map[string][]byte, error) {
-	r, err := waveform.Analyze(ctx, audio)
-	if err != nil {
-		return nil, err
-	}
-	kinds := map[string][]byte{}
-	for _, w := range r.Waveforms {
-		kinds[w.Kind] = w.Data
-	}
-	files, err := export.Build(export.WriteIn{
-		AudioPath:               "/Contents/waveeval.mp3",
-		BandScales:              r.BandScales,
-		Beats:                   []export.Beat{{BeatNumber: 1, Tempo: 120}},
-		BPM:                     120,
-		ColorWaveform:           kinds["color_preview"],
-		ColorWaveformScroll:     kinds["color_detail"],
-		DurationMs:              r.DurationMs,
-		ThreeBandWaveform:       kinds["three_band_preview"],
-		ThreeBandWaveformScroll: kinds["three_band_detail"],
-		Waveform:                kinds["mono_preview"],
-		WaveformScroll:          kinds["mono_detail"],
-	})
-	if err != nil {
-		return nil, err
-	}
-	dir, err := os.MkdirTemp("", "waveeval-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir)
-	for ext, b := range map[string][]byte{".DAT": files.DAT, ".EXT": files.EXT, ".2EX": files.TwoEX} {
-		if err := os.WriteFile(filepath.Join(dir, "ANLZ0000"+ext), b, 0o644); err != nil {
-			return nil, err
-		}
-	}
-	sections, _, err := readSections(dir)
-	return sections, err
 }
 
 func roundUp(v float64) float64 {
