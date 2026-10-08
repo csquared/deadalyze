@@ -213,14 +213,15 @@ func legacyCatalog(t map[string]any, grid legacyGrid, cues legacyCues, match Ent
 	}
 	tables = append(tables, catalog.Table{Name: "catalog_tracks", Rows: []map[string]any{obs}})
 
-	// A grid the person set by hand (DEADCA7 kept those under manual/,
-	// whatever engine first proposed them) is theirs, not the engine's: it
-	// goes in as provider "manual" so it can be the truth a run is scored
-	// against, with the app's own source word (manual, arbitrated) as the
-	// version. The engine's grids stay deadca7/legacy.
+	// A grid the person set by hand (beats_src "manual") is theirs, not the
+	// engine's: it goes in as provider "manual" so it can be the truth a run
+	// is scored against. Everything else is the engine's, "arbitrated"
+	// included: that was DEADCA7's own consensus fix applied in place, a
+	// machine's call, and it stays deadca7/legacy with the source word in
+	// the grid metadata.
 	provider, version := "deadca7", "legacy"
-	if strings.HasPrefix(str(t["beats_path"]), "manual/") {
-		provider, version = "manual", firstNonEmpty(str(t["beats_src"]), "manual")
+	if str(t["beats_src"]) == "manual" {
+		provider, version = "manual", "manual"
 	}
 	analysis := map[string]any{
 		"id": 1, "uuid": catalog.NewUUID(), "track_uuid": trackUUID, "provider": provider, "version": version,

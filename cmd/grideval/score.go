@@ -45,6 +45,13 @@ type Score struct {
 	Error    string  `json:"error,omitempty"`
 	Pass     bool    `json:"pass"`
 	Duration float64 `json:"duration"`
+	// The cross-checker's bar-phase vote and what arbitration did, from a
+	// fresh result's config: the evidence for a phase failure's fix.
+	PhaseVote      int     `json:"phase_vote,omitempty"`
+	PhaseAgreement float64 `json:"phase_agreement,omitempty"`
+	RelabelBeats   int     `json:"relabel_beats,omitempty"`
+	ShiftMs        int     `json:"shift_ms,omitempty"`
+	Consensus      string  `json:"consensus,omitempty"`
 }
 
 // score compares a fresh result with its reference.
@@ -57,6 +64,7 @@ func score(ref Reference, r *analysis.Result) Score {
 	s.BPM = r.BPM
 	s.BPMDelta = r.BPM - ref.BPM
 	s.Dispute = r.Dispute
+	s.evidence(r)
 	first, ok := firstDownbeat(r)
 	if !ok {
 		s.Error = "grid has no downbeat"
@@ -132,4 +140,31 @@ func phase(offsetSeconds, periodSeconds float64, beatsPerBar int) (beats float64
 		beats += bar
 	}
 	return beats, int(math.Round((total - beats) / bar))
+}
+
+// evidence copies the cross-checker's vote and the arbitration record off
+// a fresh result's config; a stored grid has none.
+func (s *Score) evidence(r *analysis.Result) {
+	if r.Config == nil {
+		return
+	}
+	if bt, ok := r.Config["beat_this"].(map[string]any); ok {
+		s.PhaseVote = asInt(bt["phase_vote"])
+		s.PhaseAgreement, _ = bt["phase_agreement"].(float64)
+	}
+	s.RelabelBeats = asInt(r.Config["arbitration_relabel_beats"])
+	s.ShiftMs = asInt(r.Config["arbitration_shift_ms"])
+	s.Consensus, _ = r.Config["consensus"].(string)
+}
+
+func asInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
 }

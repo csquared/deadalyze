@@ -64,6 +64,8 @@ func run() error {
 		jsonOut   = flag.String("json", "", "also write the scores as JSON here")
 		limit     = flag.Int("n", 0, "score only the first n tracks (0: all)")
 		source    = flag.String("source", "", "corpus: score only the tracks from this source (an index entry's source, by prefix)")
+		only      = flag.String("only", "", "corpus: score only the tracks whose file names are listed in this file (one a line; a grideval JSON works too)")
+		noArb     = flag.Bool("no-arbitrate", false, "corpus -fresh: flag the cross-checker's disagreements but never apply its fixes (the engine's NoArbitrate)")
 	)
 	flag.Parse()
 	ctx := context.Background()
@@ -71,7 +73,11 @@ func run() error {
 	var err error
 	switch {
 	case *corpusDir != "":
-		scores, err = scoreCorpus(ctx, *corpusDir, *truth, *provider, *fresh, *audioDir, *source, *limit)
+		names, err := onlyNames(*only)
+		if err != nil {
+			return err
+		}
+		scores, err = scoreCorpus(ctx, *corpusDir, *truth, *provider, *fresh, *audioDir, *source, names, engine.Options{NoKey: true, NoArbitrate: *noArb}, *limit)
 	case *audio != "" || *refsPath != "":
 		return folderMode(ctx, *audio, *refsPath, *update, *jsonOut)
 	default:
@@ -85,7 +91,7 @@ func run() error {
 }
 
 // scoreCorpus scores one provider's grids against another's, track by track.
-func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, audioDir, source string, limit int) ([]Score, error) {
+func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, audioDir, source string, only map[string]bool, opts engine.Options, limit int) ([]Score, error) {
 	idx, err := corpus.Load(dir)
 	if err != nil {
 		return nil, err
@@ -109,6 +115,9 @@ func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, a
 			break
 		}
 		if source != "" && !strings.HasPrefix(e.Source, source) {
+			continue
+		}
+		if only != nil && !only[e.FileName] {
 			continue
 		}
 		db, err := corpus.Open(filepath.Join(dir, e.File))
@@ -152,7 +161,7 @@ func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, a
 		fmt.Println(s.line())
 	}
 	if fresh && len(paths) > 0 {
-		scores = append(scores, scoreFresh(ctx, paths, refs)...)
+		scores = append(scores, scoreFresh(ctx, paths, refs, opts)...)
 	}
 	if skipped > 0 {
 		fmt.Printf("grideval: %d track(s) skipped (no %s reference, no %s grid, or no audio)\n", skipped, truth, provider)
@@ -161,13 +170,14 @@ func scoreCorpus(ctx context.Context, dir, truth, provider string, fresh bool, a
 }
 
 // scoreFresh analyses the paths as one batch and scores each as it
-// completes. The key detector is off: scoring reads the grid only. A track
-// the engine fails is a scored error, never the end of the run.
-func scoreFresh(ctx context.Context, paths []string, refs map[string]Reference) []Score {
+// completes. The key detector is off (opts says so): scoring reads the grid
+// only. A track the engine fails is a scored error, never the end of the
+// run.
+func scoreFresh(ctx context.Context, paths []string, refs map[string]Reference, opts engine.Options) []Score {
 	var scores []Score
 	started := time.Now()
 	last := started
-	engine.AnalyzeBatch(ctx, paths, engine.Options{NoKey: true}, func(done, total int, path string, result *analysis.Result, err error) {
+	engine.AnalyzeBatch(ctx, paths, opts, func(done, total int, path string, result *analysis.Result, err error) {
 		now := time.Now()
 		ref := refs[path]
 		var s Score
@@ -464,4 +474,31 @@ func scanCorpus(dir string) ([]Reference, error) {
 	})
 	sort.Slice(refs, func(i, j int) bool { return refs[i].Path < refs[j].Path })
 	return refs, err
+}
+
+// onlyNames reads the file names a run is limited to: one a line, or the
+// "path" of every entry of a grideval JSON (so a run can be narrowed to the
+// failures of the last one).
+func onlyNames(path string) (map[string]bool, error) {
+	if path == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]bool{}
+	var scores []Score
+	if json.Unmarshal(b, &scores) == nil {
+		for _, s := range scores {
+			names[s.Path] = true
+		}
+		return names, nil
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			names[line] = true
+		}
+	}
+	return names, nil
 }
