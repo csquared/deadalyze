@@ -83,6 +83,63 @@ def fit_lattice(beats):
     return period, origin, resid
 
 
+def resample(mono, rate, sr):
+    # The fallback decoder's resampler: librosa when it is importable, else
+    # scipy's polyphase, else linear interpolation. ffmpeg's own resampler is
+    # the common path; this only runs when ffmpeg refused the file.
+    try:
+        import librosa
+        return librosa.resample(mono, orig_sr=rate, target_sr=sr)
+    except ImportError:
+        pass
+    try:
+        from math import gcd
+        from scipy.signal import resample_poly
+        g = gcd(int(sr), int(rate))
+        return resample_poly(mono, int(sr) // g, int(rate) // g)
+    except ImportError:
+        pass
+    n = int(round(mono.size * sr / rate))
+    return np.interp(np.arange(n) * (rate / sr), np.arange(mono.size), mono)
+
+
+def decode_audio(path, ffmpeg, sr=SR, flags=(), start=0.0, duration=None):
+    # Mono float32 at sr. ffmpeg first, as the leg contract says, so every
+    # format it reads works; when ffmpeg refuses the file (a WAV with a
+    # malformed trailing LIST chunk: "too short LIST tag") libsndfile reads
+    # it, mixed to mono and resampled to sr. How the samples were decoded is
+    # not identity (docs/engine-protocol.md): the answer is the same either
+    # way. flags are ffmpeg input options; start and duration (seconds)
+    # select a stretch of the track for both decoders. The error when both
+    # refuse names both attempts.
+    cmd = [ffmpeg, "-nostdin", "-v", "error", *flags]
+    if start:
+        cmd += ["-ss", str(start)]
+    if duration is not None:
+        cmd += ["-t", str(duration)]
+    cmd += ["-i", path, "-ac", "1", "-ar", str(sr), "-f", "f32le", "-"]
+    out = subprocess.run(cmd, capture_output=True)
+    if out.returncode == 0 and out.stdout:
+        return np.frombuffer(out.stdout, dtype="<f4")
+    why = out.stderr.decode(errors="replace").strip()[:400] or f"exit {out.returncode}, no samples"
+    try:
+        import soundfile as sf
+        with sf.SoundFile(path) as f:
+            rate = int(f.samplerate)
+            if start:
+                f.seek(int(round(start * rate)))
+            frames = -1 if duration is None else int(round(duration * rate))
+            data = f.read(frames, dtype="float32", always_2d=True)
+    except Exception as e:
+        raise RuntimeError(f"ffmpeg could not decode {path}: {why}; soundfile could not either: {e}") from None
+    # ffmpeg's downmix: equal gains, L2-normalised (stereo is (L+R)/sqrt 2),
+    # so the fallback is at ffmpeg's level and the key CNN hears the same.
+    mono = data[:, 0] if data.shape[1] == 1 else data.sum(axis=1) / np.sqrt(data.shape[1])
+    if rate != sr:
+        mono = resample(mono, rate, sr)
+    return np.ascontiguousarray(mono, dtype=np.float32)
+
+
 def refine_origin(ffmpeg, path, lattice, duration):
     # Audio-anchored origin polish, the same estimator as the BeatNet leg:
     # stacked multi-band onset strength around every strong beat, rising edge
@@ -95,12 +152,10 @@ def refine_origin(ffmpeg, path, lattice, duration):
     dur = min(90.0, duration - start - 5)
     if dur < 30 or len(lattice) < 48:
         return lattice, 0.0
-    out = subprocess.run(
-        [ffmpeg, "-v", "error", "-ss", str(start), "-t", str(dur), "-i", path,
-         "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"], capture_output=True)
-    if out.returncode:
+    try:
+        x = decode_audio(path, ffmpeg, start=start, duration=dur).astype(np.float64)
+    except RuntimeError:  # as before: an undecodable stretch leaves the lattice unpolished
         return lattice, 0.0
-    x = np.frombuffer(out.stdout, dtype=np.float32).astype(np.float64)
     if len(x) < SR * 20:
         return lattice, 0.0
     ons = np.zeros(len(x))

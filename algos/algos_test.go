@@ -19,11 +19,11 @@ import (
 // cutover the pin test becomes a protocol check again, with the siblings
 // required to match these bytes.
 var pinned = map[string]string{
-	"beatnet":   "45e8ef43c89d6687c277d7b5a8000528c5e78269e5b57902d8bedf1c7e3ef29f",
-	"beat_this": "da24e3fd146f26e61b1ccffb7f64080dd3918f20d93cdef19b03834179cfe226",
-	"key":       "4f5e4ff2a7fa4858b4758d5c764610fb0dbf68f6160c9c94e289bdc197143c9e",
-	"features":  "0cc9370bf6b2e07ba3369d48ce005f275224545178673b28ba375619237eda96",
-	"cues":      "ff743d62c231d51637681c64a26516b6e72a11f0ef4391b94ad0a57534ca096d",
+	"beatnet":   "9ed2c979596e1a1e64a3a9e57f3160413181e963aa7bb854da506d0818b0e04a",
+	"beat_this": "58a022c69455d27a32c3d8e4447fe2bb32816c4c12e650568ae1d03460a1fe62",
+	"key":       "40940990b7fd6cdeb22a1bd8d9dd2ada29471419d19bca38f43e04da60ea880e",
+	"features":  "3a274315792d303d56a72d1bce189ddecfdbde4cea4e85133b621fec3f0db15e",
+	"cues":      "a10abc7e950741feb4a407236ede884880631e4935d7b726dc683e8be2fbddae",
 }
 
 // siblings are where the hosts keep their copies, relative to this repo.
