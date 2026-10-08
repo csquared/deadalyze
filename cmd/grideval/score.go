@@ -77,6 +77,14 @@ func score(ref Reference, r *analysis.Result) Score {
 	}
 	s.BeatsPerBar, s.BeatsPerBarRef = r.Grid.BeatsPerBar, bar
 	s.PhaseBeats, s.Bars = phase(float64(first-ref.FirstDownbeatMs)/1000, period(ref, r), bar)
+	// A rekordbox grid often lists its first beat as beat 2, 3 or 4, which
+	// puts its bar 1 before zero (see corpus.Beats). There is no beat there
+	// to start on, so whole bars cannot be counted against it: a grid whose
+	// bar 1 is the first downbeat in the audio is right, and only its phase
+	// within the bar is judged.
+	if ref.FirstDownbeatMs < 0 {
+		s.Bars = 0
+	}
 	s.Pass = s.BeatsPerBar == bar && math.Abs(s.BPMDelta) <= maxBPMDelta && math.Abs(s.PhaseBeats) <= maxPhaseBeats && s.Bars == 0
 	return s
 }

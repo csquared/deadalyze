@@ -98,3 +98,23 @@ func TestScoreRequiresMatchingMeter(t *testing.T) {
 		})
 	}
 }
+
+func TestAReferenceBarOneBeforeZeroCountsNoBars(t *testing.T) {
+	// rekordbox lists its first beat as beat 3 at 27 ms: its bar 1 is at
+	// -949 ms, which no grid can start on. Ours starts on the next downbeat
+	// and is in phase with it; the whole bar between them is not a fault.
+	ref := Reference{Path: "a", BPM: 123, FirstDownbeatMs: -949, BeatsPerBar: 4}
+	first := 980
+	r := &analysis.Result{BPM: 123, Grid: analysis.Grid{BPM: 123, BeatsPerBar: 4, FirstDownbeatMs: &first}}
+	s := score(ref, r)
+	if !s.Pass || s.Bars != 0 || math.Abs(s.PhaseBeats) > 0.1 {
+		t.Fatalf("score = %+v, want a pass in phase with no bars off", s)
+	}
+	// With an audible reference bar 1, a grid a bar late still fails.
+	ref.FirstDownbeatMs = 1003
+	late := 1003 + 1951
+	r.Grid.FirstDownbeatMs = &late
+	if s := score(ref, r); s.Pass || s.Bars != 1 {
+		t.Fatalf("score = %+v, want bars +1", s)
+	}
+}
