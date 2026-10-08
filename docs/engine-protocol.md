@@ -240,8 +240,9 @@ A host stores `identity`, `ran_on`, `timeline`, `consensus` and
 
 The engine puts itself and every child in its own process group and kills
 the group when it exits or when its parent dies. A host cancels by sending
-SIGTERM to the engine, then SIGKILL after a grace period (five seconds);
-closing stdin is a secondary signal the engine also honours. A cancelled
+SIGTERM to the engine, then SIGKILL after a grace period (five seconds).
+(The request is read to end of stdin, so a host closes stdin after
+writing it; closing it is not a signal.) A cancelled
 batch ends with `item_error cancelled` for each unfinished id and
 `batch_done`, when the engine is given the time to write them.
 
